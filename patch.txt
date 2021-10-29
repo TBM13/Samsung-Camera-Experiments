@@ -1,6 +1,6 @@
-Back camera: imx258
-Back camera 2: sr556
-Front camera: 4ha
+Main Back Camera: IMX258 13MP
+Super Wide Camera: SR556 5MP
+Front Camera: S5K4HA 8MP
 
 New patch (set value in ExynosCameraSensorInfoBase and don't override it in camera configs):
 	Enable Raw (Set RawFeatures to 63):
