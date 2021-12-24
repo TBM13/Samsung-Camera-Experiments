@@ -1,4 +1,4 @@
-Enable Raw & other features (Set Available Capabilities value to 63):
+#### Enable Raw & other features (Set Available Capabilities value to 63):
 	000B15C4: C4 3F
 	000B15C5: F8 22
 	000B15C6: 00 00
@@ -6,10 +6,10 @@ Enable Raw & other features (Set Available Capabilities value to 63):
 	000B15DA: 2C 38
 	000B15DB: 56 26
 
-Set Hardware Level to 1 (FULL):
+#### Set Hardware Level to 1 (FULL):
 	000B1505: 86 66
 
-Don't override Available Capabilities value on camera configs:
+#### Don't override Available Capabilities value on camera configs:
 	000B1CFE: C0 00
 	000B1CFF: F8 00
 	000B1D00: 38 00
@@ -25,7 +25,7 @@ Don't override Available Capabilities value on camera configs:
 	000BB3D4: 38 00
 	000BB3D5: 86 00
 
-Don't override Hardware Level value on camera configs:
+#### Don't override Hardware Level value on camera configs:
 	000B1CE6: 80 00
 	000B1CE7: F8 00
 	000B1CE8: 30 00
