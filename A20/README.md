@@ -1,68 +1,55 @@
-Main Back Camera: IMX258 13MP<br>
+Main Back Camera: IMX258/S5K3L6 13MP<br>
 Super Wide Camera: SR556 5MP<br>
 Front Camera: S5K4HA 8MP<br>
 
-### New patch (set value in ExynosCameraSensorInfoBase and don't override it in camera configs):
-	Enable Raw & other features (Set Available Capabilities value to 63):
-		000AB4F0: 04 3F
-		000AB4F1: F5 23
-		000AB4F2: F5 C4
-		000AB4F3: 61 F8
-		000AB4F4: 01 38
-		000AB4F5: F9 36
-		000AB4F6: CF 00
-		000AB4F7: 8A 00
-	
-	Set Hardware Level to 1 (FULL):
-		000AB47D: 86 66
-	
-	Don't override Available Capabilities value on camera configs:
-		000AF452: C0 00
-		000AF453: F8 00
-		000AF454: 38 00
-		000AF455: 56 00
-		000B10DA: C4 00
-		000B10DB: F8 00
-		000B10DC: 38 00
-		000B10DD: 06 00
-		000B40C0: C4 00
-		000B40C1: F8 00
-		000B40C2: 38 00
-		000B40C3: 06 00
-	
-	Don't override Hardware Level value on camera configs:
-		000AF45C: 80 00
-		000AF45D: F8 00
-		000AF45E: 30 00
-		000AF45F: 16 00
-		000B10C2: 84 00
-		000B10C3: F8 00
-		000B10C4: 30 00
-		000B10C5: 56 00
-		000B40A8: 84 00
-		000B40A9: F8 00
-		000B40AA: 30 00
-		000B40AB: 56 00
+#### Enable Raw & other features (Set Available Capabilities value to 63):
+	Address		Old Value	New Value
+	000AB4F0:	04		3F
+	000AB4F1:	F5		23
+	000AB4F2:	F5		C4
+	000AB4F3:	61		F8
+	000AB4F4:	01		38
+	000AB4F5:	F9		36
+	000AB4F6:	CF		00
+	000AB4F7:	8A		00
 
-### Old Patch (modify each camera config):
-	Back Camera:
-		Enable Raw & other features (Set Available Capabilities value to 63):
-			000AF45F: 16 36
-			000AF708: 43 3F
-			000AF709: F2 22
-			000AF70A: 33 C0
-			000AF70B: 32 F8
-			000AF70C: C4 38
-			000AF70D: F2 26
-			000AF70E: 3B 00
-			000AF70F: 22 00
-			000AF710: C0 00
-			000AF711: F8 00
-			000AF712: 84 00
-			000AF713: 22 00
+#### Set Hardware Level to 1 (FULL):
+	Address		Old Value	New Value
+	000AB47D:	86		66
 
-		Set Hardware Level to 1 (FULL):
-			000AF45F: 16 36
+#### Don't override Available Capabilities value on camera configs:
+	Address		Old Value	New Value
+	000AF452:	C0		00
+	000AF453:	F8		00
+	000AF454:	38		00
+	000AF455:	56		00
+
+	000B10DA:	C4		00
+	000B10DB:	F8		00
+	000B10DC:	38		00
+	000B10DD:	06		00
+
+	000B40C0:	C4		00
+	000B40C1:	F8		00
+	000B40C2:	38		00
+	000B40C3:	06		00
+
+#### Don't override Hardware Level value on camera configs:
+	Address		Old Value	New Value
+	000AF45C:	80		00
+	000AF45D:	F8		00
+	000AF45E:	30		00
+	000AF45F:	16		00
+
+	000B10C2:	84		00
+	000B10C3:	F8		00
+	000B10C4:	30		00
+	000B10C5:	56		00
+
+	000B40A8:	84		00
+	000B40A9:	F8		00
+	000B40AA:	30		00
+	000B40AB:	56		00
 
 ---------------------------------------------------------------
 
