@@ -1,3 +1,5 @@
+#### Note: Requires more testing. RAW Photos have a pink tint, this isn't solved by changing the Black Level.
+
 #### Enable Raw & other features (Set Available Capabilities value to 63):
 	Address		Old Value	New Value
 	000BE8A4:	C4		3F
