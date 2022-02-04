@@ -17,6 +17,12 @@ Front Camera: S5K4HA 8MP<br>
 	Address		Old Value	New Value
 	000AB47D:	86		66
 
+#### Set Black Level Pattern to [64, 64, 64, 64] (fixes pink tint on RAW photos):
+	Address		Old Value	New Value
+	000AB371:	F4		F0
+	000AB372:	7A		40
+	000AB373:	70		00
+
 #### Don't override Available Capabilities value on camera configs:
 	Address		Old Value	New Value
 	000AF452:	C0		00
@@ -50,6 +56,26 @@ Front Camera: S5K4HA 8MP<br>
 	000B40A9:	F8		00
 	000B40AA:	30		00
 	000B40AB:	56		00
+
+#### Don't override Black Level Pattern value on camera configs:
+	Address		Old Value	New Value
+	000AE100:	41		00
+	000AE101:	F9		00
+	000AE102:	CF		00
+	000AE103:	0A		00
+
+	000AF68C:	42		00
+	000AF68D:	F9		00
+	000AF68E:	CF		00
+	000AF68F:	0A		00
+
+	000B1315:	F9		00
+	000B1316:	CF		00
+	000B1317:	8A		00
+	
+	000B42F9:	F9		00
+	000B42FA:	CF		00
+	000B42FB:	8A		00
 
 ---------------------------------------------------------------
 
