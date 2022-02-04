@@ -9,6 +9,12 @@
 	Address		Old Value	New Value
 	000AB965:	86		66
 
+#### Set Black Level Pattern to [64, 64, 64, 64] (fixes pink tint on RAW photos):
+	Address		Old Value	New Value
+	000AB859:	F4		F0
+	000AB85A:	7A		40
+	000AB85B:	70		00
+
 #### Don't override Available Capabilities value on camera configs:
 	Address		Old Value	New Value
 	000AE3A6:	C0		00
@@ -42,3 +48,18 @@
 	000B4591:	F8		00
 	000B4592:	30		00
 	000B4593:	56		00
+
+#### Don't override Black Level Pattern value on camera configs:
+	Address		Old Value	New Value
+	000AE5E8:	41		00
+	000AE5E9:	F9		00
+	000AE5EA:	CF		00
+	000AE5EB:	0A		00
+
+	000B17FD:	F9		00
+	000B17FE:	CF		00
+	000B17FF:	8A		00
+
+	000B47E1:	F9		00
+	000B47E2:	CF		00
+	000B47E3:	8A		00
