@@ -5,22 +5,32 @@ import shutil
 import sys
 import zipfile
 
-def validateDirectory(dir: str):
+def validateDirectory(dir: str, exitOnError: bool=True) -> bool:
     if not os.path.isdir(dir):
-        print('Error: Directory "%s" not found' % dir)
-        sys.exit(1)
+        if exitOnError:
+            print('Error: Directory "%s" not found' % dir)
+            sys.exit(1)
+
+        return False
+
+    return True
 
 def main():
-    if len(sys.argv) < 2:
+    if len(sys.argv) != 2:
         print('Usage: createModule.py <device>')
         print('Example: createModule.py A20')
         sys.exit(1)
 
-    validateDirectory(sys.argv[1])
+    if not validateDirectory(sys.argv[1], False):
+        deviceModuleDir = os.path.join("Experimental", sys.argv[1], "Module")
+    else:
+        deviceModuleDir = os.path.join(sys.argv[1], "Module")
 
+    createModule(sys.argv[1], deviceModuleDir)
+
+def createModule(device: str, deviceModuleDir: str):
     moduleDir = os.path.join(os.getcwd(), "_Module")
     tmpDir = moduleDir + "Temp"
-    deviceModuleDir = os.path.join(sys.argv[1], "Module")
 
     validateDirectory(moduleDir)
     validateDirectory(deviceModuleDir)
@@ -40,7 +50,7 @@ def main():
         else:
             shutil.copytree(src, dst)
 
-    zipFile = 'Module_%s.zip' % sys.argv[1]
+    zipFile = 'Module_%s.zip' % device
     with zipfile.ZipFile(zipFile, 'w') as zip:
         for dir, _, files in os.walk(tmpDir):
             for file in files:
@@ -49,6 +59,7 @@ def main():
 
     print('\nModule saved as "%s"' % zipFile)
     shutil.rmtree(tmpDir)
+
 
 if __name__ == "__main__":
     main()
