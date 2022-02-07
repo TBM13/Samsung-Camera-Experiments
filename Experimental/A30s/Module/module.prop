@@ -1,0 +1,7 @@
+id=TBM13-CamExperiments-R-A30s
+name=Samsung Camera Experiments (A30s) (R)
+version=v2.1
+versionCode=9
+author=TBM13
+description=Enables Raw Capture and sets the camera Hardware Level to Full
+updateJson=https://raw.githubusercontent.com/TBM13/Samsung-Camera-Experiments/master/Experimental/A30s/update.json
