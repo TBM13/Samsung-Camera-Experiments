@@ -1,3 +1,7 @@
+### v2.1.1 - 17/03/2022
+* A30:
+  * Fix module not working on latest firmware versions.
+
 ### v2.1 - 04/02/2022
 * Common:
   * Module can now be updated from the Magisk App (Requires Magisk v24 or newer)
