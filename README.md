@@ -16,5 +16,7 @@ Install as a normal Magisk Module, through Magisk Manager or TWRP.
 - Camera doesn't work, shows Black Screen
   - Make sure you are using a compatible Android 11 kernel and vendor.
   - If this issue is happening after updating your firmware, please let me know.
+- Camera freezes in X app
+  - This may be caused by this module. If it does, the only fix is to remove/disable it. So far I've only experienced this in a single app that scans QR codes.
 - GCam's Night Sight takes blurred photos with pink tint
   - A workaround is to lock AF/AE before taking the photo.
