@@ -1,7 +1,7 @@
 ## October 15 Library
-#### Enable Raw & other features (Set Available Capabilities value to 63):
+#### Enable Raw & other features (Set Available Capabilities value to 31):
 	Address		Old Value	New Value
-	000B1AE4:	78			3F
+	000B1AE4:	78			1F
 	000B1AE8:	48			38
 
 #### Set Hardware Level to 1 (FULL):
@@ -64,9 +64,9 @@
 	000BBB67:	8A			00
 
 ## April 17 Library
-#### Enable Raw & other features (Set Available Capabilities value to 63):
+#### Enable Raw & other features (Set Available Capabilities value to 31):
 	Address		Old Value	New Value
-	000B15C4:	C4		3F
+	000B15C4:	C4		1F
 	000B15C5:	F8		22
 	000B15C6:	00		00
 	000B15C7:	58		00
