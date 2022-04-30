@@ -1,6 +1,6 @@
-#### Enable Raw & other features (Set Available Capabilities value to 63):
+#### Enable Raw & other features (Set Available Capabilities value to 31):
 	Address		Old Value	New Value
-	000ABA08:	78		3F
+	000ABA08:	78		1F
 	000ABA09:	21		23
 	000ABA0C:	48		38
 	000ABA0D:	16		36
