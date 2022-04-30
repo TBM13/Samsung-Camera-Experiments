@@ -1,5 +1,6 @@
 #!/system/bin/sh
 MODDIR=${0%/*}
+rm "$MODDIR/postFsData.log"
 echo "Init" >> "$MODDIR/postFsData.log"
 
 LIBPATH="/vendor/lib"
