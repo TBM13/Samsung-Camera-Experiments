@@ -1,3 +1,7 @@
+### v2.1.2 - 22/07/2022
+* A20, A20e and A30:
+  * Disabled ZSL and Private Reprocessing. This was making the camera freeze in some apps.
+
 ### v2.1.1 - 17/03/2022
 * A30:
   * Fix module not working on latest firmware versions.
