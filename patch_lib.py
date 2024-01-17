@@ -198,6 +198,10 @@ def find_capabilities_and_hw_level_offsets(lib_data: bytes) -> tuple[int, int]:
     print(f'Available capabilities offset: {hex(cap_offset)}')
     print(f'Hardware level offset: {hex(hw_offset)}')
 
+    # Both offsets are usually close to each other
+    if abs(cap_offset - hw_offset) > 64:
+        print('\033[33m[w] Big difference between offsets, one of them may be wrong\033[0m')
+
     assert(isinstance(cap_offset, int) and isinstance(hw_offset, int))
     assert(hw_offset != cap_offset)
     return (cap_offset, hw_offset)
