@@ -170,35 +170,18 @@ def find_capabilities_and_hw_level_offsets(lib_data: bytes) -> tuple[int, int]:
                 replacement=b'\\1'
             ),
             LibModificationPattern(
-                name='Exynos 850 (Android 13) (64-bit)',
-                is_64bit=True,
-                pattern=(
-                    # Fragment of android::ExynosCameraMetadataConverter::m_createAvailableCapabilities
-                    rb'('
-                    rb'\xd0\x3b\xd5...\xf9.{4,8}.\x03.\xaa.{3,11}\xb4'
-                    # LDRB WX, [RX, #HW_LEVEL_OFFSET]
-                    rb'(...\x39)'
-                    rb'.{20}'
-                    # LDR XX, [XX, #AVAILABLE_CAPABILITIES_OFFSET]
-                    rb'(...\xf9)'
-                    rb'...\x91...\x91...\x91...\x91'
-                    rb')'
-                ),
-                replacement=b'\\1'
-            ),
-            LibModificationPattern(
                 name='Generic (64-bit)',
                 is_64bit=True,
                 pattern=(
                     # Fragment of android::ExynosCameraMetadataConverter::m_createAvailableCapabilities
                     rb'('
-                    rb'\xd0\x3b\xd5...\xf9.{4,8}.\x03.\xaa.{3,11}\xb4'
+                    rb'\xd0\x3b\xd5...\xf9(?:.{4}|.{8}).\x03.\xaa(?:.{8})?...\xb4'
                     # LDRB WX, [RX, #HW_LEVEL_OFFSET]
                     rb'(...\x39)'
-                    rb'(?:.{4})?'
+                    rb'(?:.{4}|.{20})?'
                     # LDR XX, [XX, #AVAILABLE_CAPABILITIES_OFFSET]
                     rb'(...\xf9)'
-                    rb'.{19,23}\x91...\x91...\x91...\x91'
+                    rb'(?:.{16}|.{20})?...\x91...\x91...\x91...\x91'
                     rb')'
                 ),
                 replacement=b'\\1'
