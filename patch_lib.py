@@ -247,7 +247,7 @@ def build_sensor_info_struct_mod(lib_data: bytes,
         ),
         patterns=[
             LibModificationPattern(
-                name='Exynos 1280/7884/7904/9825 (Android 11/Android 13) (32-bit)',
+                name='Exynos 990/1280/7884/7904/9825 (Android 11-14) (32-bit)',
                 is_64bit=False,
                 pattern=(
                     # This is the last part of the android::createExynosCameraSensorInfo function, corresponding
@@ -263,7 +263,7 @@ def build_sensor_info_struct_mod(lib_data: bytes,
                     rb'(....)' # BRANCH_TO_ANDROIDLOGPRINT
 
                     # ORIGINAL_CODE_2 - won't be modified
-                    rb'(.......\xd1'
+                    rb'(......(?:.\xd1|\x02\xbf)'
                         # MOV r0, RSTRUCT. RSTRUCT contains the address of the ExynosCameraSensorInfo struct
                         rb'(.\x46)' # MOV_R0_RSTRUCT
                     rb')'
@@ -419,7 +419,7 @@ def build_sensor_info_struct_mod(lib_data: bytes,
                 )
             ),
             LibModificationPattern(
-                name='Exynos 7884/7904/9825 (Android 10/Android 11) (64-bit)',
+                name='Exynos 990/7884/7904/9825 (Android 10-14) (64-bit)',
                 is_64bit=True,
                 pattern=(
                     rb'(\x52|\x91....)' # ORIGINAL_CODE_1
