@@ -247,7 +247,7 @@ def build_sensor_info_struct_mod(lib_data: bytes,
         ),
         patterns=[
             LibModificationPattern(
-                name='Exynos 990/1280/7884/7904/9825 (Android 11-14) (32-bit)',
+                name='Exynos 990/1280/7884/7904/9825 (Android 10-14) (32-bit)',
                 is_64bit=False,
                 pattern=(
                     # This is the last part of the android::createExynosCameraSensorInfo function, corresponding
@@ -348,7 +348,7 @@ def build_sensor_info_struct_mod(lib_data: bytes,
             # 64-bit Exynos 9610/9611 patterns need to go first since they match the 1280/7884/7904/9825
             # one but have an extra instruction before the branch, so it should have a higher priority
             LibModificationPattern(
-                name='Exynos 9610/9611 (Android 10/Android 11) (64-bit)',
+                name='Exynos 9610/9611 (Android 10-11) (64-bit)',
                 is_64bit=True,
                 pattern=(
                     rb'(\x52|\x91....)' # ORIGINAL_CODE_1
