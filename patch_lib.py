@@ -153,6 +153,22 @@ def find_capabilities_and_hw_level_offsets(lib_data: bytes) -> tuple[int, int]:
         ),
         patterns=[
             LibModificationPattern(
+                name='Galaxy A20 (Android 9) (32-bit)',
+                is_64bit=False,
+                pattern=(
+                    # Fragment of android::ExynosCameraMetadataConverter::m_createAvailableCapabilities
+                    rb'('
+                    rb'.\xb0.\x46...\x46.\x46...\x44.......\xd0...\xf8..'
+                    # LDRB RX, [RX, #HW_LEVEL_OFFSET]
+                    rb'(.\xf8..)'
+                    # LDR RX, [RX, #AVAILABLE_CAPABILITIES_OFFSET]
+                    rb'(.\xf8..)'
+                    rb'....\x4f\xf0'
+                    rb')'
+                ),
+                replacement=b'\\1'
+            ),
+            LibModificationPattern(
                 name='Generic (32-bit)',
                 is_64bit=False,
                 pattern=(
