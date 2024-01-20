@@ -158,10 +158,10 @@ def find_capabilities_and_hw_level_offsets(lib_data: bytes) -> tuple[int, int]:
                 pattern=(
                     # Fragment of android::ExynosCameraMetadataConverter::m_createAvailableCapabilities
                     rb'('
-                    rb'\xb0.\x46.{5,7}\x44.......\xf0.....\xf0.{2,4}'
+                    rb'.\xb0.\x46(?:.{5}|.{7})\x44.......\xf0.....\xf0(?:.{2}|.{4})'
                     # LDRB RX, [RX, #HW_LEVEL_OFFSET]
                     rb'(.\xf8..)'
-                    rb'.{0,6}'
+                    rb'(?:.{4}|.{6})?'
                     # LDR RX, [RX, #AVAILABLE_CAPABILITIES_OFFSET]
                     rb'(.\xf8..)'
                     rb'.\xf8'
