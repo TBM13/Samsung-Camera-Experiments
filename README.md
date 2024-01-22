@@ -4,7 +4,10 @@ A Python script that automatically patches the 32-bit and 64-bit camera librarie
 Requires Python 3.10 or higher.
 
 The libraries are located at `/vendor/lib/libexynoscamera3.so` and `/vendor/lib64/libexynoscamera3.so`. \
-If the script fails to patch yours, open an issue and attach them.
+If the script fails to patch yours, open an issue and attach them, specifying your device model and Android version.
+
+> [!NOTE]  
+> - The camera lib of old devices (those that launched with Android 8.1 or lower) seems to be very different so they may never be supported.
 
 ### Features
 The following camera features can be enabled/modified:
