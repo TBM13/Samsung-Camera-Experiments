@@ -21,6 +21,8 @@ LIBS = [
     # Exynos 1280
     LibData("libs/a53_t.so", 0x8b8, 0x8c0),
     LibData("libs/a53_t_64.so", 0xa14, 0xa18),
+    LibData("libs/m34_t.so", 0x8b8, 0x8c0),
+    LibData("libs/m34_t_64.so", 0xa14, 0xa18),
     # Exynos 7884/7904
     LibData("libs/a20_p.so", 0x594, 0x598),
     LibData("libs/a20_p_64.so", 0x6e8, 0x6f0),
