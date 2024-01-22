@@ -12,6 +12,7 @@ LIBS = [
     # Exynos 850
     LibData("libs/a12-nacho_t.so", 0x648, 0x650),
     LibData("libs/a12-nacho_t_64.so", 0x79c, 0x7a0),
+    LibData("libs/a13_u.so", 0x640, 0x648),
     # Exynos 990
     LibData("libs/note20ultra_u.so", 0x8c0, 0x8c8),
     LibData("libs/note20ultra_u_64.so", 0xa1c, 0xa20),
