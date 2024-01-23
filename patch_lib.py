@@ -246,15 +246,19 @@ def build_sensor_info_struct_mod(lib_data: bytes,
             'capabilities bitmask and/or changes the Hardware Level (Limited, Full, Level 3...)'
         ),
         patterns=[
+            # New patterns should be added at the bottom, so they have less priority
+            ###################################################################
+            ######################### 32-BIT PATTERNS #########################
+            ###################################################################
             LibModificationPattern(
-                name='Exynos 990/1280/7884/7904/9825 (Android 10-14) (32-bit)',
+                name='Exynos 990/1280/7884/7904/9611/9825 (Android 10-14) (32-bit)',
                 is_64bit=False,
                 pattern=(
                     # This is the last part of the android::createExynosCameraSensorInfo function, corresponding
                     # to _android_log_print(4, "ExynosCameraSensorInfo", "INFO(%s[%d]):sensor ID %d name %s", ...)
 
                     # STMEA - Unsure if it's safe to replace this with a NOP
-                    rb'(.\xe8\x11\x01)' # ORIGINAL_CODE_1 - won't be modified
+                    rb'(.\xe8\x11\x01|.\xe8\x91\x00)' # ORIGINAL_CODE_1 - won't be modified
 
                     # MOVS RX, #4. We'll remember which register RX is since it's safe to modify it
                     rb'(\x04.)' # MOV_RX_FOUR
@@ -263,7 +267,7 @@ def build_sensor_info_struct_mod(lib_data: bytes,
                     rb'(....)' # BRANCH_TO_ANDROIDLOGPRINT
 
                     # ORIGINAL_CODE_2 - won't be modified
-                    rb'(......(?:.\xd1|\x02\xbf)'
+                    rb'(......(?:.\xd1|\x02\xbf|.{6}\x02\xbf)'
                         # MOV r0, RSTRUCT. RSTRUCT contains the address of the ExynosCameraSensorInfo struct
                         rb'(.\x46)' # MOV_R0_RSTRUCT
                     rb')'
@@ -344,7 +348,9 @@ def build_sensor_info_struct_mod(lib_data: bytes,
                     b'\\5'
                 )
             ),
-
+            ###################################################################
+            ######################### 64-BIT PATTERNS #########################
+            ###################################################################
             # 64-bit Exynos 9610/9611 patterns need to go first since they match the 1280/7884/7904/9825
             # one but have an extra instruction before the branch, so it should have a higher priority
             LibModificationPattern(
@@ -419,7 +425,7 @@ def build_sensor_info_struct_mod(lib_data: bytes,
                 )
             ),
             LibModificationPattern(
-                name='Exynos 990/7884/7904/9825 (Android 10-14) (64-bit)',
+                name='Exynos 990/7884/7904/9611/9825 (Android 10-14) (64-bit)',
                 is_64bit=True,
                 pattern=(
                     rb'(\x52|\x91....)' # ORIGINAL_CODE_1
