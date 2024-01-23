@@ -50,6 +50,8 @@ LIBS = [
     LibData("libs/m31_r.so", 0x630, 0x638),
     LibData("libs/tabs6lite_q.so", 0x600, 0x608),
     LibData("libs/tabs6lite_q_64.so", 0x74c, 0x750),
+    LibData("libs/tabs6lite_t.so", 0x640, 0x648),
+    LibData("libs/tabs6lite_t_64.so", 0x794, 0x798),
     # Exynos 9825
     LibData("libs/f62_r.so", 0x768, 0x770),
 ]
