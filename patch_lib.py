@@ -297,7 +297,7 @@ def build_sensor_info_struct_mod(lib_data: bytes,
                 )
             ),
             LibModificationPattern(
-                name='Exynos 850 (Android 13) (32-bit)',
+                name='Exynos 850/9611 (Android 12-13) (32-bit)',
                 is_64bit=False,
                 pattern=(
                     rb'(\x46)' # ORIGINAL_CODE_1
@@ -305,7 +305,7 @@ def build_sensor_info_struct_mod(lib_data: bytes,
                     rb'(\x04.)' # MOV_RX_FOUR
                     rb'()' # MOV_WX_X
                     rb'.....\x44.\x44(....)' # BRANCH_TO_ANDROIDLOGPRINT
-                    rb'(.....\x44.....\x42\x02\xbf(.\x46))' # ORIGINAL_CODE_2 & MOV_R0_RSTRUCT
+                    rb'(.....(?:\x44.....)?\x42\x02\xbf(.\x46))' # ORIGINAL_CODE_2 & MOV_R0_RSTRUCT
                 ),
                 replacement=(
                     b'\\1' +
@@ -354,7 +354,7 @@ def build_sensor_info_struct_mod(lib_data: bytes,
             # 64-bit Exynos 9610/9611 patterns need to go first since they match the 1280/7884/7904/9825
             # one but have an extra instruction before the branch, so it should have a higher priority
             LibModificationPattern(
-                name='Exynos 9610/9611 (Android 10-11) (64-bit)',
+                name='Exynos 9610/9611 (Android 10-12) (64-bit)',
                 is_64bit=True,
                 pattern=(
                     rb'(\x52|\x91....)' # ORIGINAL_CODE_1
