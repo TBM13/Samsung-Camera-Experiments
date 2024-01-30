@@ -88,3 +88,4 @@ All tests were done using [BSG's GCam 8.1](https://www.celsoazevedo.com/files/an
 |Galaxy A51|Exynos 9611|Partially|<table><th>Android 11</th><tr><td>Photos have pink tint. Changing black level doesn't help</td></tr></table>|
 |Galaxy F62|Exynos 9825|Partially|<table><th>Android 11</th><tr><td>Issues with the front camera</td></tr></table>|
 |Galaxy M31|Exynos 9611|Partially|<table><th>Android 11</th><tr><td>Photos have pink tint. Changing black level doesn't help</td></tr></table>|
+|Galaxy M31s|Exynos 9611|Partially|<table><th>Android 12</th><tr><td>Photos have pink tint. Changing black level doesn't help</td></tr></table>|
