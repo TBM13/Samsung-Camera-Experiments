@@ -1,7 +1,7 @@
 # Samsung Camera Experiments
 ## `patch_lib.py`
 A Python script that automatically patches the 32-bit and 64-bit camera libraries of Exynos devices to enable different features. \
-Requires Python 3.10 or higher.
+Requires Python 3.10 or higher. May not work with Python 3.12+ since the `capstone` module requires `distutils` which was deprecated on that version.
 
 The libraries are located at `/vendor/lib/libexynoscamera3.so` and `/vendor/lib64/libexynoscamera3.so`. \
 If the script fails to patch yours, open an issue and attach them, specifying your device model and Android version.
