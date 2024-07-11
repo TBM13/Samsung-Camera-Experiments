@@ -222,9 +222,9 @@ def find_capabilities_and_hw_level_offsets(lib_data: bytes) -> tuple[int, int]:
     assert(hw_offset != cap_offset)
     return (cap_offset, hw_offset)
 
-def build_sensor_info_struct_mod(lib_data: bytes,
-                                 capabilities: list[int] | None = None,
-                                 hw_level: int | None = None) -> LibModification:
+def build_sensor_info_struct_mod(lib_data: bytes, capabilities: list[int] | None = None,
+                                 hw_level: int | None = None,
+                                 skip_depth_cameras: bool = False) -> LibModification:
     # The idea is simple; search for the last part of the android::createExynosCameraSensorInfo
     # function (which creates the ExynosCameraSensorInfo struct of all cameras) and replace the
     # instructions related to a call to _android_log_print with NOP instructions.
@@ -480,11 +480,13 @@ def build_sensor_info_struct_mod(lib_data: bytes,
     assert(free_reg != free_reg2)
     assert(isinstance(struct_reg, str))
 
+    # Utils that will be used by the mods
     rep = pattern.replacement
+    nop = asm('nop', pattern.is_64bit)
+    mod_len = rep.count(nop) * len(nop)
+    current_position = 0
     def replace_nops(instructions: list[bytes]):
-        nonlocal rep
-        nop = asm('nop', pattern.is_64bit)
-
+        nonlocal rep, nop, current_position
         required_nops = 0
         for ins in instructions:
             required_nops += int(len(ins) / len(nop))
@@ -498,9 +500,70 @@ def build_sensor_info_struct_mod(lib_data: bytes,
         rep = rep.replace(
             nop * required_nops, b''.join(instructions), 1
         )
+        current_position += required_nops * len(nop)
 
     # Find struct offsets
     available_cap_offset, hw_lvl_offset = find_capabilities_and_hw_level_offsets(lib_data)
+
+    # Lets start with modifications that require reading the value of
+    # available capabilities, so we only need a single LDR instruction
+    if skip_depth_cameras or capabilities is not None:
+        replace_nops([
+            asm(f'ldr {free_reg}, [{struct_reg}, #{available_cap_offset}]', pattern.is_64bit)
+        ])
+
+        # Add conditional branch to skip depth cameras
+        if skip_depth_cameras:
+            instructions = []
+            branch_offset = mod_len - current_position
+
+            if pattern.is_64bit:
+                instructions.append(
+                    asm(f'tbnz {free_reg}, #7, {branch_offset}', True)
+                )
+            else:
+                instructions.append(
+                    asm(f'TST {free_reg}, {Capability.DEPTH_OUTPUT}', False),
+                )
+                branch_offset -= len(instructions[0])
+                instructions.append(
+                    asm(f'bne {branch_offset}', False)
+                )
+
+            replace_nops(instructions)
+            print('[+] Added conditional to skip depth cameras')
+
+        # Modify available capabilities
+        if capabilities is not None:
+            value = 0
+            enabled_caps = []
+            for cap in capabilities:
+                value |= cap
+                enabled_caps.append(Capability(cap).name)
+
+            instructions = []
+            # ORR in ARM64 doesn't support many immediate values. If it works for value then great,
+            # otherwise we need to store value into another register first
+            try:
+                instructions.append(
+                    asm(f'orr {free_reg}, {free_reg}, #{value}', pattern.is_64bit)
+                )
+            except KsError:
+                if not pattern.is_64bit:
+                    raise KsError('Unknown error')
+
+                instructions.append(
+                    asm(f'mov {free_reg2}, #{value}', pattern.is_64bit)
+                )
+                instructions.append(
+                    asm(f'orr {free_reg}, {free_reg}, {free_reg2}', pattern.is_64bit)
+                )
+
+            instructions.append(
+                asm(f'str {free_reg}, [{struct_reg}, #{available_cap_offset}]', pattern.is_64bit)
+            )
+            replace_nops(instructions)
+            print(f'[+] Enabled capabilities: {", ".join(enabled_caps)}')
 
     # Set hardware level
     if hw_level is not None:
@@ -510,41 +573,6 @@ def build_sensor_info_struct_mod(lib_data: bytes,
             asm(f'strb {free_reg}, [{struct_reg}, #{hw_lvl_offset}]', pattern.is_64bit)  
         ])
         print(f'[+] Hardware level set to {hw_level} ({HardwareLevel(hw_level).name})')
-
-    # Modify available capabilities
-    if capabilities is not None:
-        value = 0
-        enabled_caps = []
-        for cap in capabilities:
-            value |= cap
-            enabled_caps.append(Capability(cap).name)
-
-        instructions = [
-            asm(f'ldr {free_reg}, [{struct_reg}, #{available_cap_offset}]', pattern.is_64bit)
-        ]
-
-        # ORR in ARM64 doesn't support many immediate values. If it works for value then great,
-        # otherwise we need to store value into another register first
-        try:
-            instructions.append(
-                asm(f'orr {free_reg}, {free_reg}, #{value}', pattern.is_64bit)
-            )
-        except KsError:
-            if not pattern.is_64bit:
-                raise KsError('Unknown error')
-
-            instructions.append(
-                asm(f'mov {free_reg2}, #{value}', pattern.is_64bit)
-            )
-            instructions.append(
-                asm(f'orr {free_reg}, {free_reg}, {free_reg2}', pattern.is_64bit)
-            )
-
-        instructions.append(
-            asm(f'str {free_reg}, [{struct_reg}, #{available_cap_offset}]', pattern.is_64bit)
-        )
-        replace_nops(instructions)
-        print(f'[+] Enabled capabilities: {", ".join(enabled_caps)}')
 
     assert(len(rep) == len(pattern.replacement))
     pattern.replacement = rep
@@ -572,6 +600,13 @@ def parse_args() -> argparse.Namespace:
         '-cap', type=int,
         choices=list(Capability), nargs='+',
         help='The capabilities that will be enabled, separated by spaces'
+    )
+    mod_options.add_argument(
+        '--skip-depth', action='store_true',
+        help=(
+            'Skips modifications on cameras with the "Depth Output" capability. '
+            'Recommended if your device has a depth camera since the lib can crash if you enable RAW on them, for example.'
+        )
     )
 
     module_options = parser.add_argument_group(
@@ -611,7 +646,8 @@ def main():
     # Patch 32-bit lib
     print('[*] Patching 32-bit lib...')
     mod = build_sensor_info_struct_mod(
-        lib_data, capabilities=args.cap, hw_level=args.hw
+        lib_data, capabilities=args.cap, hw_level=args.hw,
+        skip_depth_cameras=args.skip_depth
     )
     lib_data = apply_modification(lib_data, mod)
     with open(patched_lib, 'wb') as f:
@@ -621,7 +657,8 @@ def main():
     # Patch 64-bit lib
     print('\n[*] Patching 64-bit lib...')
     mod = build_sensor_info_struct_mod(
-        lib_data_64, capabilities=args.cap, hw_level=args.hw
+        lib_data_64, capabilities=args.cap, hw_level=args.hw,
+        skip_depth_cameras=args.skip_depth
     )
     lib_data_64 = apply_modification(lib_data_64, mod)
     with open(patched_lib_64, 'wb') as f:

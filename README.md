@@ -43,7 +43,7 @@ The following camera features can be enabled/modified:
 ```
 usage: patch_lib.py [-h] [-hw {0,1,2,3,4}]
                     [-cap {2,4,8,16,32,64,128,256,512,1024,2048} [{2,4,8,16,32,64,128,256,512,1024,2048} ...]]
-                    [--model MODEL] [--android-version ANDROID_VERSION] [--version VERSION]
+                    [--skip-depth] [--model MODEL] [--android-version ANDROID_VERSION] [--version VERSION]
                     camera_lib camera_lib_64
 
 positional arguments:
@@ -57,6 +57,8 @@ Lib Modifications:
   -hw {0,1,2,3,4}       The hardware level that will be set
   -cap {2,4,8,16,32,64,128,256,512,1024,2048} [{2,4,8,16,32,64,128,256,512,1024,2048} ...]
                         The capabilities that will be enabled, separated by spaces
+  --skip-depth          Skips modifications on cameras with the "Depth Output" capability. Recommended if your device
+                        has a depth camera since the lib can crash if you enable RAW on them, for example.
 
 Magisk Module:
   If all these settings are provided, a Magisk module with both patched libs will be created
@@ -71,6 +73,11 @@ Magisk Module:
 `python3 ./patch_lib.py libexynoscamera3.so libexynoscamera3_64.so -cap 16` will enable the RAW capability. This should be enough to make GCam work.
 
 `python3 ./patch_lib.py libexynoscamera3.so libexynoscamera3_64.so -hw 1 -cap 16` will enable the RAW capability and set the hardware level to FULL.
+
+### Troubleshooting
+If Android doesn't show show any cameras, this means the camera lib crashed:
+  * Can happen if your device has a depth camera, try patching with `--skip-depth`.
+  * Someone [has reported](https://github.com/TBM13/Samsung-Camera-Experiments/issues/7#issuecomment-1949522917) that they had to move the lib to `/vendor/lib64/hw/`. Try it if you see something like `dlopen failed: library "libexynoscamera3.so" not found` in the logcat.
 
 ## GCam tests after enabling the RAW capability
 **Note:** If you test this on a device not listed here or you have any issue/weird behaviour, please let me know.
