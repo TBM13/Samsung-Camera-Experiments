@@ -433,7 +433,7 @@ def build_sensor_info_struct_mod(lib_data: bytes, capabilities: list[int] | None
                     rb'(....)' # MOV_RX_FOUR
                     rb'(...\x52|...\x32)' # MOV_WX_X
                     rb'.\x03.\x2a(....)' # BRANCH_TO_ANDROIDLOGPRINT
-                    rb'(.{0,4}...\xf9.......\xeb...\x54(.\x03.\xaa)...\xa9...\xa9...\xa9)' # ORIGINAL_CODE_2 & MOV_R0_RSTRUCT
+                    rb'(.{0,4}...\xf9.......\xeb...\x54(.\x03.\xaa)...\xa9...\xa9(?:...\xf9)?...\xa9)' # ORIGINAL_CODE_2 & MOV_R0_RSTRUCT
                 ),
                 replacement=(
                     b'\\1' +
