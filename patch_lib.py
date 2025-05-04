@@ -258,7 +258,7 @@ def build_sensor_info_struct_mod(lib_data: bytes, capabilities: list[int] | None
                     # to _android_log_print(4, "ExynosCameraSensorInfo", "INFO(%s[%d]):sensor ID %d name %s", ...)
 
                     # STMEA - Unsure if it's safe to replace this with a NOP
-                    rb'(.\xe8\x11\x01|.\xe8\x91\x00)' # ORIGINAL_CODE_1 - won't be modified
+                    rb'(.\xe8\x11\x01|.\xe8\x91\x00|.\xe9\x00\x10)' # ORIGINAL_CODE_1 - won't be modified
 
                     # MOVS RX, #4. We'll remember which register RX is since it's safe to modify it
                     rb'(\x04.)' # MOV_RX_FOUR
@@ -348,6 +348,39 @@ def build_sensor_info_struct_mod(lib_data: bytes, capabilities: list[int] | None
                     b'\\5'
                 )
             ),
+            LibModificationPattern(
+                name='Exynos 1280 (Android 14) (32-bit)',
+                is_64bit=False,
+                pattern=(
+                    # This is the last part of the android::createExynosCameraSensorInfo function, corresponding
+                    # to _android_log_print(4, "ExynosCameraSensorInfo", "INFO(%s[%d]):sensor ID %d name %s", ...)
+
+                    # MOV.W R0, 0x2CC - should be fine to replace, because it's only used in the log
+                    rb'\x4f\xf4\x33\x70'
+
+                    # STMEA - Unsure if it's safe to replace this with a NOP
+                    rb'(.{8}.\xe8\x11\x01|.{8}.\xe8\x91\x00|.{8}.\xe9\x00\x10)' # ORIGINAL_CODE_2 - won't be modified
+
+                    # MOVS RX, #4. We'll remember which register RX is since it's safe to modify it
+                    rb'(\x04.)' # MOV_RX_FOUR
+                    rb'()' # MOV_WX_X - only present in 64-bit patterns
+                    rb'.....\x44.\x44'
+                    rb'(....)' # BRANCH_TO_ANDROIDLOGPRINT
+
+                    # ORIGINAL_CODE_3 - won't be modified
+                    rb'(......(?:.\xd1|\x02\xbf|.{6}\x02\xbf)'
+                        # MOV r0, RSTRUCT. RSTRUCT contains the address of the ExynosCameraSensorInfo struct
+                        rb'(.\x46)' # MOV_R0_RSTRUCT
+                    rb')'
+                ),
+                replacement=(
+                    asm('nop', False) * 2 +
+                    b'\\1' +
+                    # These NOPs will be replaced with our mod instructions
+                    asm('nop', False) * 7 +
+                    b'\\5'
+                )
+            ),
             ###################################################################
             ######################### 64-BIT PATTERNS #########################
             ###################################################################
@@ -398,6 +431,25 @@ def build_sensor_info_struct_mod(lib_data: bytes, capabilities: list[int] | None
                     rb'(...\x52|...\x32)' # MOV_WX_X
                     rb'.\x03.\x2a(....)' # BRANCH_TO_ANDROIDLOGPRINT
                     rb'(.{0,4}...\xf9.......\xeb...\x54(.\x03.\xaa).{0,4}...\xa9...\xa9...\xa9)' # ORIGINAL_CODE_2 & MOV_R0_RSTRUCT
+                ),
+                replacement=(
+                    b'\\1' +
+                    asm('nop', True) * 12 +
+                    b'\\5'
+                )
+            ),
+            LibModificationPattern(
+                name='Exynos 1280 (Android 14) (64-bit)',
+                is_64bit=True,
+                pattern=(
+                    rb'()' # ORIGINAL_CODE_1
+                    rb'...............\x91...\x91...\x91'
+                    # The MOVs are in a different order but it doesn't matter
+                    rb'(...\x52)' # MOV_WX_X
+                    rb'...\x91'
+                    rb'(....)' # MOV_RX_FOUR
+                    rb'.\x03.\x2a.\x03.\x2a(....)' # BRANCH_TO_ANDROIDLOGPRINT
+                    rb'(.{0,4}...\xf9.......\xeb...\x54(.\x03.\xaa)...\xa9...\xa9...\xa9)' # ORIGINAL_CODE_2 & MOV_R0_RSTRUCT
                 ),
                 replacement=(
                     b'\\1' +
@@ -666,7 +718,9 @@ def main():
         print(f'[*] Patched lib saved as "{patched_lib_64}"')
 
     # Ensure we didn't add nor remove instructions
+    print(len(lib_data), lib_data_len)
     assert(len(lib_data) == lib_data_len)
+    print(len(lib_data_64), lib_data_64_len)
     assert(len(lib_data_64) == lib_data_64_len)
 
     # Create Magisk module
