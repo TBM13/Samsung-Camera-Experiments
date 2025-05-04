@@ -718,9 +718,7 @@ def main():
         print(f'[*] Patched lib saved as "{patched_lib_64}"')
 
     # Ensure we didn't add nor remove instructions
-    print(len(lib_data), lib_data_len)
     assert(len(lib_data) == lib_data_len)
-    print(len(lib_data_64), lib_data_64_len)
     assert(len(lib_data_64) == lib_data_64_len)
 
     # Create Magisk module
