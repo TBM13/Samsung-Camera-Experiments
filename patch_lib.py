@@ -258,7 +258,7 @@ def build_sensor_info_struct_mod(lib_data: bytes, capabilities: list[int] | None
                     # to _android_log_print(4, "ExynosCameraSensorInfo", "INFO(%s[%d]):sensor ID %d name %s", ...)
 
                     # STMEA - Unsure if it's safe to replace this with a NOP
-                    rb'(.\xe8\x11\x01|.\xe8\x91\x00|.\xe9\x00\x10)' # ORIGINAL_CODE_1 - won't be modified
+                    rb'(.\xe8\x11\x01|.\xe8\x91\x00)' # ORIGINAL_CODE_1 - won't be modified
 
                     # MOVS RX, #4. We'll remember which register RX is since it's safe to modify it
                     rb'(\x04.)' # MOV_RX_FOUR
