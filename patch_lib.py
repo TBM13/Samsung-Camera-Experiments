@@ -233,13 +233,11 @@ def build_sensor_info_struct_mod(
     # & replace a call to _android_log_print with NOPs. Then, we replace
     # the NOPs with our own instructions to modify values inside the struct.
 
-    class Groups():
+    class Groups(enum.IntEnum):
         ORIGINAL_CODE_1 = 0
-        MOV_RX_FOUR = 1
-        MOV_WX_X = 2
-        BRANCH_TO_ANDROIDLOGPRINT = 3
-        ORIGINAL_CODE_2 = 4
-        MOV_R0_RSTRUCT = 5
+        BRANCH_TO_ANDROIDLOGPRINT = 1
+        ORIGINAL_CODE_2 = 2
+        MOV_R0_RSTRUCT = 3
     
     mod = LibModification(
         name='Modify ExynosCameraSensorInfo struct',
@@ -261,10 +259,7 @@ def build_sensor_info_struct_mod(
 
                     # _android_log_print(4, "ExynosCameraSensorInfo", "INFO(%s[%d]):sensor ID %d name ...
                     rb'..(?:.\xe8\x11\x01|.\xe8\x91\x00)'
-                    # MOVS RX, #4. We'll remember which register RX is since it's safe to modify it
-                    rb'(\x04.)' # MOV_RX_FOUR
-                    rb'()' # MOV_WX_X - only present in 64-bit patterns
-                    rb'.......\x44.\x44.\x44'
+                    rb'\x04........\x44.\x44.\x44'
                     rb'(....)' # BRANCH_TO_ANDROIDLOGPRINT
 
                     # ORIGINAL_CODE_2 - won't be modified
@@ -274,9 +269,9 @@ def build_sensor_info_struct_mod(
                     rb')'
                 ),
                 replacement=(
-                    b'\\1' +
+                    b'\\' + str(Groups.ORIGINAL_CODE_1 + 1).encode() +
                     asm('nop', False) * 12 +
-                    b'\\5'
+                    b'\\' + str(Groups.ORIGINAL_CODE_2 + 1).encode()
                 )
             ),
             LibModificationPattern(
@@ -286,17 +281,15 @@ def build_sensor_info_struct_mod(
                     rb'()' # ORIGINAL_CODE_1
 
                     rb'....(?:.\xe8\x11\x01|.\xe8\x91\x00)'
-                    rb'(\x04.)' # MOV_RX_FOUR
-                    rb'()' # MOV_WX_X
-                    rb'.......\x44.\x44.\x44'
+                    rb'\x04........\x44.\x44.\x44'
                     rb'(....)' # BRANCH_TO_ANDROIDLOGPRINT
 
                     rb'(......(?:.\xd1|\x02\xbf|.{6}\x02\xbf)(.\x46))'  # ORIGINAL_CODE_2 & MOV_R0_RSTRUCT
                 ),
                 replacement=(
-                    b'\\1' +
+                    b'\\' + str(Groups.ORIGINAL_CODE_1 + 1).encode() +
                     asm('nop', False) * 13 +
-                    b'\\5'
+                    b'\\' + str(Groups.ORIGINAL_CODE_2 + 1).encode()
                 )
             ),
             LibModificationPattern(
@@ -306,16 +299,14 @@ def build_sensor_info_struct_mod(
                     rb'()' # ORIGINAL_CODE_1
                     
                     rb'.......\x46.\x44.\xe9..'
-                    rb'(\x04.)' # MOV_RX_FOUR
-                    rb'()' # MOV_WX_X
-                    rb'.\xe9.......\x44.\x44(....)' # BRANCH_TO_ANDROIDLOGPRINT
+                    rb'\x04..\xe9.......\x44.\x44(....)' # BRANCH_TO_ANDROIDLOGPRINT
 
                     rb'(......\x02\xbf(.\x46))' # ORIGINAL_CODE_2 & MOV_R0_RSTRUCT
                 ),
                 replacement=(
-                    b'\\1' +
+                    b'\\' + str(Groups.ORIGINAL_CODE_1 + 1).encode() +
                     asm('nop', False) * 16 +
-                    b'\\5'
+                    b'\\' + str(Groups.ORIGINAL_CODE_2 + 1).encode()
                 )
             ),
             LibModificationPattern(
@@ -325,16 +316,14 @@ def build_sensor_info_struct_mod(
                     rb'()' # ORIGINAL_CODE_1
 
                     rb'.......\xe9...\x46.\x44.\xe9..'
-                    rb'(\x04.)' # MOV_RX_FOUR
-                    rb'()' # MOV_WX_X
-                    rb'.....\x44.\x44(....)' # BRANCH_TO_ANDROIDLOGPRINT
+                    rb'\x04......\x44.\x44(....)' # BRANCH_TO_ANDROIDLOGPRINT
 
                     rb'(.....(?:\x44.....)?\x42..(.\x46))' # ORIGINAL_CODE_2 & MOV_R0_RSTRUCT
                 ),
                 replacement=(
-                    b'\\1' +
+                    b'\\' + str(Groups.ORIGINAL_CODE_1 + 1).encode() +
                     asm('nop', False) * 16 +
-                    b'\\5'
+                    b'\\' + str(Groups.ORIGINAL_CODE_2 + 1).encode()
                 )
             ),
             LibModificationPattern(
@@ -343,18 +332,15 @@ def build_sensor_info_struct_mod(
                 pattern=(
                     rb'()' # ORIGINAL_CODE_1
 
-                    rb'.\x49.\x4a.\x4b....'
-                    rb'.\xe8\x91\x00'
-                    rb'(\x04.)' # MOV_RX_FOUR
-                    rb'()' # MOV_WX_X
-                    rb'.\x44.\x44.\x44(....)' # BRANCH_TO_ANDROIDLOGPRINT
+                    rb'.\x49.\x4a.\x4b.....\xe8\x91\x00'
+                    rb'\x04..\x44.\x44.\x44(....)' # BRANCH_TO_ANDROIDLOGPRINT
 
                     rb'(...\x44.........\xd1(.\x46))' # ORIGINAL_CODE_2 & MOV_R0_RSTRUCT
                 ),
                 replacement=(
-                    b'\\1' +
+                    b'\\' + str(Groups.ORIGINAL_CODE_1 + 1).encode() +
                     asm('nop', False) * 13 +
-                    b'\\5'
+                    b'\\' + str(Groups.ORIGINAL_CODE_2 + 1).encode()
                 )
             ),
             LibModificationPattern(
@@ -365,38 +351,34 @@ def build_sensor_info_struct_mod(
 
                     rb'\x4f\xf4...\xe9...\x46'
                     rb'.........\x44...\x44.\x44'
-                    rb'(\x04.)' # MOV_RX_FOUR
-                    rb'()' # MOV_WX_X
-                    rb'(....)' # BRANCH_TO_ANDROIDLOGPRINT
+                    rb'\x04.(....)' # BRANCH_TO_ANDROIDLOGPRINT
 
                     rb'(.....\x44......\x02\xbf(.\x46))' # ORIGINAL_CODE_2 & MOV_R0_RSTRUCT
                 ),
                 replacement=(
-                    b'\\1' +
+                    b'\\' + str(Groups.ORIGINAL_CODE_1 + 1).encode() +
                     asm('nop', False) * 16 +
-                    b'\\5'
+                    b'\\' + str(Groups.ORIGINAL_CODE_2 + 1).encode()
                 )
             ),
+
             ###################################################################
             ######################### 64-BIT PATTERNS #########################
             ###################################################################
-            # 64-bit Exynos 9610/9611 patterns need to go first since they match the 1280/7884/7904/9825
-            # one but have an extra instruction before the branch, so it should have a higher priority
             LibModificationPattern(
                 name='Exynos 9610/9611 (Android 10-12) (64-bit)',
                 is_64bit=True,
                 pattern=(
                     rb'(\x52|\x91....)' # ORIGINAL_CODE_1
                     rb'...............\x91...\x91...\x91...\x91'
-                    rb'(....)' # MOV_RX_FOUR
-                    rb'(...\x52|...\x32)' # MOV_WX_X
+                    rb'....(?:...\x52|...\x32)'
                     rb'.\x03.\x2a.\x03.\x2a(....)' # BRANCH_TO_ANDROIDLOGPRINT
                     rb'(.{0,4}...\xf9.......\xeb...\x54(.\x03.\xaa)...\xa9...\xa9.{0,4}...\xa9)' # ORIGINAL_CODE_2 & MOV_R0_RSTRUCT
                 ),
                 replacement=(
-                    b'\\1' +
+                    b'\\' + str(Groups.ORIGINAL_CODE_1 + 1).encode() +
                     asm('nop', True) * 12 +
-                    b'\\5'
+                    b'\\' + str(Groups.ORIGINAL_CODE_2 + 1).encode()
                 )
             ),
             LibModificationPattern(
@@ -405,15 +387,14 @@ def build_sensor_info_struct_mod(
                 pattern=(
                     rb'(\x52|\x91....)' # ORIGINAL_CODE_1
                     rb'...............\x91...\x91...\x91'
-                    rb'(....)' # MOV_RX_FOUR
-                    rb'(...\x52|...\x32)' # MOV_WX_X
+                    rb'....(?:...\x52|...\x32)'
                     rb'...\x91.\x03.\x2a.\x03.\x2a(....)' # BRANCH_TO_ANDROIDLOGPRINT
                     rb'(.{0,4}...\xf9.......\xeb...\x54(.\x03.\xaa)...\xa9...\xa9...\xa9)' # ORIGINAL_CODE_2 & MOV_R0_RSTRUCT
                 ),
                 replacement=(
-                    b'\\1' +
+                    b'\\' + str(Groups.ORIGINAL_CODE_1 + 1).encode() +
                     asm('nop', True) * 12 +
-                    b'\\5'
+                    b'\\' + str(Groups.ORIGINAL_CODE_2 + 1).encode()
                 )
             ),
             LibModificationPattern(
@@ -422,16 +403,15 @@ def build_sensor_info_struct_mod(
                 pattern=(
                     rb'(\x52|\x91....)' # ORIGINAL_CODE_1
                     rb'...............\x91...\x91...\x91...\x91'
-                    rb'(....)' # MOV_RX_FOUR
-                    rb'.\x03.\x2a'
-                    rb'(...\x52|...\x32)' # MOV_WX_X
+                    rb'.....\x03.\x2a'
+                    rb'(?:...\x52|...\x32)'
                     rb'.\x03.\x2a(....)' # BRANCH_TO_ANDROIDLOGPRINT
                     rb'(.{0,4}...\xf9.......\xeb...\x54(.\x03.\xaa).{0,4}...\xa9...\xa9...\xa9)' # ORIGINAL_CODE_2 & MOV_R0_RSTRUCT
                 ),
                 replacement=(
-                    b'\\1' +
+                    b'\\' + str(Groups.ORIGINAL_CODE_1 + 1).encode() +
                     asm('nop', True) * 12 +
-                    b'\\5'
+                    b'\\' + str(Groups.ORIGINAL_CODE_2 + 1).encode()
                 )
             ),
             LibModificationPattern(
@@ -440,17 +420,14 @@ def build_sensor_info_struct_mod(
                 pattern=(
                     rb'()' # ORIGINAL_CODE_1
                     rb'...............\x91...\x91...\x91'
-                    # The MOVs are in a different order but it doesn't matter
-                    rb'(...\x52)' # MOV_WX_X
-                    rb'...\x91'
-                    rb'(....)' # MOV_RX_FOUR
-                    rb'.\x03.\x2a.\x03.\x2a(....)' # BRANCH_TO_ANDROIDLOGPRINT
+                    rb'...\x52...\x91'
+                    rb'.....\x03.\x2a.\x03.\x2a(....)' # BRANCH_TO_ANDROIDLOGPRINT
                     rb'(.{0,4}...\xf9.......\xeb...\x54(.\x03.\xaa)...\xa9...\xa9...\xa9)' # ORIGINAL_CODE_2 & MOV_R0_RSTRUCT
                 ),
                 replacement=(
-                    b'\\1' +
+                    b'\\' + str(Groups.ORIGINAL_CODE_1 + 1).encode() +
                     asm('nop', True) * 12 +
-                    b'\\5'
+                    b'\\' + str(Groups.ORIGINAL_CODE_2 + 1).encode()
                 )
             ),
             LibModificationPattern(
@@ -459,17 +436,14 @@ def build_sensor_info_struct_mod(
                 pattern=(
                     rb'()' # ORIGINAL_CODE_1
                     rb'...............\x91...\x91...\x91'
-                    # The MOVs are in a different order but it doesn't matter
-                    rb'(...\x52)' # MOV_WX_X
-                    rb'...\x91'
-                    rb'(....)' # MOV_RX_FOUR
-                    rb'.\x03.\x2a(....)' # BRANCH_TO_ANDROIDLOGPRINT
+                    rb'...\x52...\x91'
+                    rb'.....\x03.\x2a(....)' # BRANCH_TO_ANDROIDLOGPRINT
                     rb'(.{0,4}...\xf9.......\xeb...\x54(.\x03.\xaa)...\xa9...\xa9...\xa9)' # ORIGINAL_CODE_2 & MOV_R0_RSTRUCT
                 ),
                 replacement=(
-                    b'\\1' +
+                    b'\\' + str(Groups.ORIGINAL_CODE_1 + 1).encode() +
                     asm('nop', True) * 11 +
-                    b'\\5'
+                    b'\\' + str(Groups.ORIGINAL_CODE_2 + 1).encode()
                 )
             ),
             LibModificationPattern(
@@ -478,15 +452,14 @@ def build_sensor_info_struct_mod(
                 pattern=(
                     rb'(\x52|\x91....)' # ORIGINAL_CODE_1
                     rb'...............\x91...\x91...\x91...\x91'
-                    rb'(....)' # MOV_RX_FOUR
-                    rb'(...\x52|...\x32)' # MOV_WX_X
+                    rb'....(?:...\x52|...\x32)'
                     rb'.\x03.\x2a(....)' # BRANCH_TO_ANDROIDLOGPRINT
                     rb'(.{0,4}...\xf9.......\xeb...\x54(.\x03.\xaa)...\xa9...\xa9(?:...\xf9)?...\xa9)' # ORIGINAL_CODE_2 & MOV_R0_RSTRUCT
                 ),
                 replacement=(
-                    b'\\1' +
+                    b'\\' + str(Groups.ORIGINAL_CODE_1 + 1).encode() +
                     asm('nop', True) * 11 +
-                    b'\\5'
+                    b'\\' + str(Groups.ORIGINAL_CODE_2 + 1).encode()
                 )
             ),
             LibModificationPattern(
@@ -495,15 +468,14 @@ def build_sensor_info_struct_mod(
                 pattern=(
                     rb'(\x52|\x91....)' # ORIGINAL_CODE_1
                     rb'...............\x91...\x91...\x91'
-                    rb'(....)' # MOV_RX_FOUR
-                    rb'(...\x52|...\x32)' # MOV_WX_X
+                    rb'....(?:...\x52|...\x32)'
                     rb'...\x91.\x03.\x2a(....)' # BRANCH_TO_ANDROIDLOGPRINT
                     rb'(.{0,4}...\xf9.......\xeb...\x54(.\x03.\xaa)...\xa9...\xa9...\xa9)' # ORIGINAL_CODE_2 & MOV_R0_RSTRUCT
                 ),
                 replacement=(
-                    b'\\1' +
+                    b'\\' + str(Groups.ORIGINAL_CODE_1 + 1).encode() +
                     asm('nop', True) * 11 +
-                    b'\\5'
+                    b'\\' + str(Groups.ORIGINAL_CODE_2 + 1).encode()
                 )
             )
         ]
@@ -515,19 +487,17 @@ def build_sensor_info_struct_mod(
 
     # Ensure the last instruction we replaced with a NOP is a branch
     last_ins = disasm(match[Groups.BRANCH_TO_ANDROIDLOGPRINT], pattern.is_64bit)[0]
-    assert last_ins in ['b', 'bl', 'blx']
+    assert last_ins in ['b', 'bl', 'blx'], last_ins
 
-    # Get registers
-    free_reg = disasm_mov(match[Groups.MOV_RX_FOUR], pattern.is_64bit)[0]
-    free_reg2 = ''
-    if pattern.is_64bit:
-        free_reg2 = disasm_mov(match[Groups.MOV_WX_X], pattern.is_64bit)[0]
+    # We can safely use both registers since they are originally used
+    # as parameters for _android_log_print
+    free_reg = 'w0' if pattern.is_64bit else 'r0'
+    free_reg2 = 'w1' if pattern.is_64bit else 'r1'
     struct_reg = disasm_mov(match[Groups.MOV_R0_RSTRUCT], pattern.is_64bit)[1]
-    print(f'ExynosCameraSensorInfo struct register: {struct_reg} Free register(s): {free_reg} {free_reg2}')
+    print(f'ExynosCameraSensorInfo struct register: {struct_reg}')
+    assert isinstance(struct_reg, str)
     assert struct_reg != free_reg
     assert struct_reg != free_reg2
-    assert free_reg != free_reg2
-    assert isinstance(struct_reg, str)
 
     # Utils that will be used by the mods
     rep = pattern.replacement
