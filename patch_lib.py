@@ -147,7 +147,7 @@ def find_capabilities_and_hw_level_offsets(lib_data: bytes) -> tuple[int, int]:
     mod = LibModification(
         name='Find available capabilities & hardware level offsets',
         description=(
-            'Finds the offsets of the available capabilities bitmask and'
+            'Finds the offsets of the available capabilities bitmask and '
             'the Hardware Level value inside the ExynosCameraSensorInfo struct'
         ),
         patterns=[
@@ -227,11 +227,11 @@ def build_sensor_info_struct_mod(
         hw_level: int|None = None,
         skip_depth_cameras: bool = False
     ) -> LibModification:
-    # The idea is simple; search for the last part of the android::createExynosCameraSensorInfo
-    # function (which creates the ExynosCameraSensorInfo struct of all cameras) and replace the
-    # instructions related to a call to _android_log_print with NOP instructions.
-    # Then, depending on the arguments passed (hw_level, capabilities...), replace those NOPs
-    # with the instructions to modify the corresponding values inside the struct
+
+    # The idea is simple; search for the last part of the function that creates the
+    # ExynosCameraSensorInfo struct of all cameras (createExynosCameraSensorInfo)
+    # & replace a call to _android_log_print with NOPs. Then, we replace
+    # the NOPs with our own instructions to modify values inside the struct.
 
     class Groups():
         ORIGINAL_CODE_1 = 0
@@ -244,8 +244,8 @@ def build_sensor_info_struct_mod(
     mod = LibModification(
         name='Modify ExynosCameraSensorInfo struct',
         description=(
-            'Enables the specified capabilities (Raw, ZSH, etc.) by modifying the available '
-            'capabilities bitmask and/or changes the Hardware Level (Limited, Full, Level 3...)'
+            'Modifies values inside the ExynosCameraSensorInfo struct '
+            'to enable capabilities, change the hardware level, etc.'
         ),
         patterns=[
             # New patterns should be added at the bottom, so they have less priority
@@ -519,7 +519,7 @@ def build_sensor_info_struct_mod(
     if pattern is None or match is None:
         sys.exit(1)
 
-    # Ensure the last instruction we replaced with a NOP is a branch instruction
+    # Ensure the last instruction we replaced with a NOP is a branch
     last_ins = disasm(match[Groups.BRANCH_TO_ANDROIDLOGPRINT], pattern.is_64bit)[0]
     assert last_ins in ['b', 'bl', 'blx']
 
