@@ -601,12 +601,8 @@ def build_sensor_info_struct_mod(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        'camera_lib', type=argparse.FileType('rb'),
-        help='Path of the 32-bit libexynoscamera3.so'
-    )
-    parser.add_argument(
-        'camera_lib_64', type=argparse.FileType('rb'),
-        help='Path of the 64-bit libexynoscamera3.so'
+        'libs', type=argparse.FileType('rb'), nargs='+',
+        help='Path(s) of the libexynoscamera3.so lib(s) to patch'
     )
 
     mod_options = parser.add_argument_group('Lib Modifications')
@@ -653,45 +649,36 @@ def main():
         print('[!] No modifications specified')
         sys.exit(1)
 
-    patched_lib = 'libexynoscamera3_patched.so'
-    patched_lib_64 = 'libexynoscamera3_patched_64.so'
-    lib_data = args.camera_lib.read()
-    lib_data_len = len(lib_data)
-    lib_data_64 = args.camera_lib_64.read()
-    lib_data_64_len = len(lib_data_64)
-    args.camera_lib.close()
-    args.camera_lib_64.close()
+    out_libs: list[str] = []
+    for file in args.libs:
+        base, _ = os.path.splitext(file.name)
+        output_path = f'{base}_patched.so'
 
-    # Patch 32-bit lib
-    print('[*] Patching 32-bit lib...')
-    mod = build_sensor_info_struct_mod(
-        lib_data, capabilities=args.cap, hw_level=args.hw,
-        skip_depth_cameras=args.skip_depth
-    )
-    lib_data = apply_modification(lib_data, mod)
-    with open(patched_lib, 'wb') as f:
-        f.write(lib_data)
-        print(f'[*] Patched lib saved as "{patched_lib}"')
+        data = file.read()
+        data_len = len(data)
+        file.close()
 
-    # Patch 64-bit lib
-    print('\n[*] Patching 64-bit lib...')
-    mod = build_sensor_info_struct_mod(
-        lib_data_64, capabilities=args.cap, hw_level=args.hw,
-        skip_depth_cameras=args.skip_depth
-    )
-    lib_data_64 = apply_modification(lib_data_64, mod)
-    with open(patched_lib_64, 'wb') as f:
-        f.write(lib_data_64)
-        print(f'[*] Patched lib saved as "{patched_lib_64}"')
+        print(f'\n[*] Patching "{file.name}"...')
+        mod = build_sensor_info_struct_mod(
+            data, capabilities=args.cap, hw_level=args.hw,
+            skip_depth_cameras=args.skip_depth
+        )
 
-    # Ensure we didn't add nor remove instructions
-    assert len(lib_data) == lib_data_len
-    assert len(lib_data_64) == lib_data_64_len
+        data = apply_modification(data, mod)
+        with open(output_path, 'wb') as f:
+            f.write(data)
+            print(f'[*] Patched lib saved as "{output_path}"')
+
+        # Ensure we didn't add nor remove instructions
+        assert len(data) == data_len
+        out_libs.append(output_path)
 
     # Create Magisk module
     print()
-    if (args.model is not None and args.android_version is not None and
-            args.version is not None):
+    if (args.model is not None
+        and args.android_version is not None
+        and args.version is not None
+    ):
         modifications=''
         if args.cap is not None:
             modifications += (
@@ -705,7 +692,7 @@ def main():
         modifications = modifications[0].upper() + modifications[1:]
 
         create_magisk_module(
-            patched_lib, patched_lib_64, args.model,
+            out_libs, args.model,
             str(args.android_version), str(args.version), modifications
         )        
 
@@ -718,9 +705,30 @@ def apply_modification(lib_data: bytes, mod: LibModification) -> bytes:
     print(f'[+] Applied "{mod.name}"')
     return patched_data
 
-def create_magisk_module(lib_path: str, lib_path_64: str,
-                         model: str, android_version: str, version: str,
-                         modifications: str):
+def create_magisk_module(
+        libs: list[str], 
+        model: str, android_version: str, version: str,
+        modifications: str
+    ):
+    if len(libs) > 2:
+        print('[!] Too many libs provided')
+        sys.exit(1)
+
+    lib32 = None
+    lib64 = None
+    for lib in libs:
+        with open(lib, 'rb') as f:
+            magic = f.read(5)
+            if magic[4] == 2:
+                lib64 = lib
+            else:
+                lib32 = lib
+
+    assert lib32 is not None or lib64 is not None
+    if len(libs) == 2 and (lib32 is None or lib64 is None):
+        print('[!] Two libs of the same architecture provided')
+        sys.exit(1)
+
     module_base_dir = os.path.join(os.getcwd(), 'ModuleBase')
     if not os.path.isdir(module_base_dir):
         print(f'"[!] {module_base_dir}" not found')
@@ -733,10 +741,12 @@ def create_magisk_module(lib_path: str, lib_path_64: str,
 
     dst_32 = os.path.join(tmp_dir, 'system/vendor/lib/libexynoscamera3.so')
     dst_64 = os.path.join(tmp_dir, 'system/vendor/lib64/libexynoscamera3.so')
-    os.makedirs(os.path.dirname(dst_32), exist_ok=True)
-    os.makedirs(os.path.dirname(dst_64), exist_ok=True)
-    shutil.copy(lib_path, dst_32)
-    shutil.copy(lib_path_64, dst_64)
+    if lib32 is not None:
+        os.makedirs(os.path.dirname(dst_32), exist_ok=True)
+        shutil.copy(lib32, dst_32)
+    if lib64 is not None:
+        os.makedirs(os.path.dirname(dst_64), exist_ok=True)
+        shutil.copy(lib64, dst_64)
 
     # Update module.prop
     model = model.replace(' ', '_')
