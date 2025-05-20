@@ -1,4 +1,4 @@
-Private/*
+*.i64
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

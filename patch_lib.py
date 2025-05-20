@@ -275,7 +275,7 @@ def build_sensor_info_struct_mod(
                 )
             ),
             LibModificationPattern(
-                name='Exynos 990/1280/7884/7904/9825 (Android 10-14) (32-bit)',
+                name='Exynos 990/1280/7884/7904/9820/9825 (Android 10-14) (32-bit)',
                 is_64bit=False,
                 pattern=(
                     rb'()' # ORIGINAL_CODE_1
