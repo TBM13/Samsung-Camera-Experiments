@@ -6,8 +6,10 @@ import re
 import shutil
 import sys
 import zipfile
+
 from capstone import *
 from keystone import *
+
 
 class LibModificationPattern:
     def __init__(self, name: str, is_64bit: bool,
@@ -17,9 +19,10 @@ class LibModificationPattern:
         self.pattern = pattern
         self.replacement = replacement
 
-# To generate the patterns, I selected some instructions in Ghidra and used
-# its Instruction Pattern Search tool. In it, I masked all columns except the
-# first one, copied the full search string and converted it using "ghidra_pattern_to_regex.py"
+# To generate the patterns, I selected some instructions in Ghidra,
+# then opened the Instruction Pattern Search tool and masked all columns
+# except the first. After that, I copied the full search string
+# and converted it with "ghidra_pattern_to_regex.py"
 
 class LibModification:
     def __init__(self, name: str, description: str,
@@ -28,13 +31,14 @@ class LibModification:
         self.description = description
         self.patterns = patterns
 
-    def try_match(self,
-                  lib_data: bytes) -> tuple[LibModificationPattern | None, tuple | None]:
-        """Tries to match all the patterns in `self.patterns` against `lib_data`
+    def try_match(
+            self, lib_data: bytes
+        ) -> tuple[LibModificationPattern|None, tuple|None]:
+        """Tries to match all the patterns against `lib_data`
         until one matches exactly one time.
         
-        Returns a tuple containing the matching pattern and the match if successful,
-        otherwise `(None, None)`.
+        Returns a tuple containing the matching pattern and the match,
+        or `(None, None)`.
         """
         for i, pattern in enumerate(self.patterns):
             matches = re.findall(pattern.pattern, lib_data, re.DOTALL)
@@ -48,7 +52,7 @@ class LibModification:
             print(f'[*] [{self.name}] Found match using "{pattern.name}" pattern')
             return (pattern, matches[0])
 
-    def try_patch(self, lib_data: bytes) -> bytes | None:
+    def try_patch(self, lib_data: bytes) -> bytes|None:
         """Tries to apply the modification to `lib_data`.
 
         Returns the modified bytes if successful, otherwise `None`.
@@ -66,33 +70,28 @@ ks_thumb = Ks(KS_ARCH_ARM, KS_MODE_THUMB + KS_MODE_LITTLE_ENDIAN)
 ks_arm64 = Ks(KS_ARCH_ARM64, KS_MODE_LITTLE_ENDIAN)
 
 def disasm(instruction: bytes, arm64: bool) -> tuple[str, str]:
-    if arm64:
-        ins = next(cs_arm64.disasm_lite(instruction, 0x0))
-    else:
-        ins = next(cs_thumb.disasm_lite(instruction, 0x0))
+    cs = cs_arm64 if arm64 else cs_thumb
+    ins = next(cs.disasm_lite(instruction, 0x0))
 
     return (ins[2], ins[3])
 
 def disasm_multiple(instructions: bytes, arm64: bool) -> list[tuple[str, str]]:
-    if arm64:
-        ins = cs_arm64.disasm_lite(instructions, 0x0)
-    else:
-        ins = cs_thumb.disasm_lite(instructions, 0x0)
+    cs = cs_arm64 if arm64 else cs_thumb
+    ins = cs.disasm_lite(instructions, 0x0)
 
     return [(x[2], x[3]) for x in ins]
 
 def asm(instruction: str, arm64: bool) -> bytes:
-    if arm64:
-        return bytes(ks_arm64.asm(instruction)[0])
-    else:
-        return bytes(ks_thumb.asm(instruction)[0])
+    ks = ks_arm64 if arm64 else ks_thumb
+
+    return bytes(ks.asm(instruction)[0])
 
 def sanitize(instruction: str) -> str:
     return instruction.replace(' ', '').replace('[', '').replace(']', '')
 
 def disasm_ldr(instruction: bytes, arm64: bool) -> tuple[str, str, str|int]:
     op = disasm(instruction, arm64)
-    assert(op[0].startswith('ldr'))
+    assert op[0].startswith('ldr')
 
     data = sanitize(op[1]).split(',')
     if data[2].startswith('#'):
@@ -102,7 +101,7 @@ def disasm_ldr(instruction: bytes, arm64: bool) -> tuple[str, str, str|int]:
 
 def disasm_mov(instruction: bytes, arm64: bool) -> tuple[str, str|int]:
     op = disasm(instruction, arm64)
-    assert(op[0].startswith('mov'))
+    assert op[0].startswith('mov')
 
     data = sanitize(op[1]).split(',')
     if data[1].startswith('#'):
@@ -218,13 +217,16 @@ def find_capabilities_and_hw_level_offsets(lib_data: bytes) -> tuple[int, int]:
     if abs(cap_offset - hw_offset) > 64:
         print('\033[33m[w] Big difference between offsets, one of them may be wrong\033[0m')
 
-    assert(isinstance(cap_offset, int) and isinstance(hw_offset, int))
-    assert(hw_offset != cap_offset)
-    return (cap_offset, hw_offset)
+    assert isinstance(cap_offset, int) and isinstance(hw_offset, int)
+    assert hw_offset != cap_offset
+    return cap_offset, hw_offset
 
-def build_sensor_info_struct_mod(lib_data: bytes, capabilities: list[int] | None = None,
-                                 hw_level: int | None = None,
-                                 skip_depth_cameras: bool = False) -> LibModification:
+def build_sensor_info_struct_mod(
+        lib_data: bytes,
+        capabilities: list[int]|None = None,
+        hw_level: int|None = None,
+        skip_depth_cameras: bool = False
+    ) -> LibModification:
     # The idea is simple; search for the last part of the android::createExynosCameraSensorInfo
     # function (which creates the ExynosCameraSensorInfo struct of all cameras) and replace the
     # instructions related to a call to _android_log_print with NOP instructions.
@@ -518,7 +520,8 @@ def build_sensor_info_struct_mod(lib_data: bytes, capabilities: list[int] | None
         sys.exit(1)
 
     # Ensure the last instruction we replaced with a NOP is a branch instruction
-    assert(disasm(match[Groups.BRANCH_TO_ANDROIDLOGPRINT], pattern.is_64bit)[0] in ['b', 'bl', 'blx'])
+    last_ins = disasm(match[Groups.BRANCH_TO_ANDROIDLOGPRINT], pattern.is_64bit)[0]
+    assert last_ins in ['b', 'bl', 'blx']
 
     # Get registers
     free_reg = disasm_mov(match[Groups.MOV_RX_FOUR], pattern.is_64bit)[0]
@@ -527,10 +530,10 @@ def build_sensor_info_struct_mod(lib_data: bytes, capabilities: list[int] | None
         free_reg2 = disasm_mov(match[Groups.MOV_WX_X], pattern.is_64bit)[0]
     struct_reg = disasm_mov(match[Groups.MOV_R0_RSTRUCT], pattern.is_64bit)[1]
     print(f'ExynosCameraSensorInfo struct register: {struct_reg} Free register(s): {free_reg} {free_reg2}')
-    assert(struct_reg != free_reg)
-    assert(struct_reg != free_reg2)
-    assert(free_reg != free_reg2)
-    assert(isinstance(struct_reg, str))
+    assert struct_reg != free_reg
+    assert struct_reg != free_reg2
+    assert free_reg != free_reg2
+    assert isinstance(struct_reg, str)
 
     # Utils that will be used by the mods
     rep = pattern.replacement
@@ -626,7 +629,7 @@ def build_sensor_info_struct_mod(lib_data: bytes, capabilities: list[int] | None
         ])
         print(f'[+] Hardware level set to {hw_level} ({HardwareLevel(hw_level).name})')
 
-    assert(len(rep) == len(pattern.replacement))
+    assert len(rep) == len(pattern.replacement)
     pattern.replacement = rep
     return mod
 
@@ -718,8 +721,8 @@ def main():
         print(f'[*] Patched lib saved as "{patched_lib_64}"')
 
     # Ensure we didn't add nor remove instructions
-    assert(len(lib_data) == lib_data_len)
-    assert(len(lib_data_64) == lib_data_64_len)
+    assert len(lib_data) == lib_data_len
+    assert len(lib_data_64) == lib_data_64_len
 
     # Create Magisk module
     print()
