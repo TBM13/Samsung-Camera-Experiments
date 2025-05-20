@@ -8,6 +8,10 @@ class LibData:
         self.hw_level_offset = hw_level_offset
         self.available_cap_offset = available_cap_offset
 
+
+        with open(path, "rb") as f:
+            self.data = f.read()
+
 LIBS = [
     # Exynos 850
     LibData("libs/a12-nacho_t.so", 0x648, 0x650),
@@ -63,11 +67,16 @@ LIBS = [
 class TestLibs(unittest.TestCase):
     def test_find_capabilities_and_hw_level_offsets(self):
         for lib in LIBS:
-            with open(lib.path, "rb") as f:
-                data = f.read()
-
             print(lib.path)
+
             self.assertEqual(
-                find_capabilities_and_hw_level_offsets(data),
+                find_capabilities_and_hw_level_offsets(lib.data),
                 (lib.available_cap_offset, lib.hw_level_offset)
             )
+
+    def test_build_sensor_info_struct_mod(self):
+        for lib in LIBS:
+            print(lib.path)
+
+            # Ensure that at least one pattern matched the lib
+            build_sensor_info_struct_mod(lib.data)
