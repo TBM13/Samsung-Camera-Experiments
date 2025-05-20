@@ -20,9 +20,9 @@ class LibModificationPattern:
         self.replacement = replacement
 
 # To generate the patterns, I selected some instructions in Ghidra,
-# then opened the Instruction Pattern Search tool and masked all columns
-# except the first. After that, I copied the full search string
-# and converted it with "ghidra_pattern_to_regex.py"
+# then opened the Instruction Pattern Search tool (Search->For Instruction Patterns)
+# and masked all columns except the first. After that, I copied
+# the full search string and converted it with "ghidra_pattern_to_regex.py"
 
 class LibModification:
     def __init__(self, name: str, description: str,
@@ -249,19 +249,18 @@ def build_sensor_info_struct_mod(
         ),
         patterns=[
             # New patterns should be added at the bottom, so they have less priority
+
             ###################################################################
             ######################### 32-BIT PATTERNS #########################
             ###################################################################
             LibModificationPattern(
-                name='Exynos 990/1280/7884/7904/9611/9825 (Android 10-14) (32-bit)',
+                name='Tab S6 Lite (Android 10-13) (32-bit)',
                 is_64bit=False,
                 pattern=(
-                    # This is the last part of the android::createExynosCameraSensorInfo function, corresponding
-                    # to _android_log_print(4, "ExynosCameraSensorInfo", "INFO(%s[%d]):sensor ID %d name %s", ...)
+                    rb'(.\x44......)' # ORIGINAL_CODE_1 - won't be modified
 
-                    # STMEA - Unsure if it's safe to replace this with a NOP
-                    rb'(.\xe8\x11\x01|.\xe8\x91\x00)' # ORIGINAL_CODE_1 - won't be modified
-
+                    # _android_log_print(4, "ExynosCameraSensorInfo", "INFO(%s[%d]):sensor ID %d name ...
+                    rb'..(?:.\xe8\x11\x01|.\xe8\x91\x00)'
                     # MOVS RX, #4. We'll remember which register RX is since it's safe to modify it
                     rb'(\x04.)' # MOV_RX_FOUR
                     rb'()' # MOV_WX_X - only present in 64-bit patterns
@@ -269,28 +268,10 @@ def build_sensor_info_struct_mod(
                     rb'(....)' # BRANCH_TO_ANDROIDLOGPRINT
 
                     # ORIGINAL_CODE_2 - won't be modified
-                    rb'(......(?:.\xd1|\x02\xbf|.{6}\x02\xbf)'
+                    rb'((?:.{6}|.{5}\x44.{5}\x42)\x02\xbf'
                         # MOV r0, RSTRUCT. RSTRUCT contains the address of the ExynosCameraSensorInfo struct
                         rb'(.\x46)' # MOV_R0_RSTRUCT
                     rb')'
-                ),
-                replacement=(
-                    b'\\1' +
-                    # These NOPs will be replaced with our mod instructions
-                    asm('nop', False) * 9 +
-                    b'\\5'
-                )
-            ),
-            LibModificationPattern(
-                name='Exynos 9610/9611 (Android 11) (32-bit)',
-                is_64bit=False,
-                pattern=(
-                    rb'(\x46)' # ORIGINAL_CODE_1
-                    rb'.\x44.\xe9..'
-                    rb'(\x04.)' # MOV_RX_FOUR
-                    rb'()' # MOV_WX_X
-                    rb'.\xe9.......\x44.\x44(....)' # BRANCH_TO_ANDROIDLOGPRINT
-                    rb'(......\x02\xbf(.\x46))' # ORIGINAL_CODE_2 & MOV_R0_RSTRUCT
                 ),
                 replacement=(
                     b'\\1' +
@@ -299,19 +280,60 @@ def build_sensor_info_struct_mod(
                 )
             ),
             LibModificationPattern(
-                name='Exynos 850/9611 (Android 12-13) (32-bit)',
+                name='Exynos 990/1280/7884/7904/9825 (Android 10-14) (32-bit)',
                 is_64bit=False,
                 pattern=(
-                    rb'(\x46)' # ORIGINAL_CODE_1
-                    rb'.\x44.\xe9..'
+                    rb'()' # ORIGINAL_CODE_1
+
+                    rb'....(?:.\xe8\x11\x01|.\xe8\x91\x00)'
                     rb'(\x04.)' # MOV_RX_FOUR
                     rb'()' # MOV_WX_X
-                    rb'.....\x44.\x44(....)' # BRANCH_TO_ANDROIDLOGPRINT
-                    rb'(.....(?:\x44.....)?\x42\x02\xbf(.\x46))' # ORIGINAL_CODE_2 & MOV_R0_RSTRUCT
+                    rb'.......\x44.\x44.\x44'
+                    rb'(....)' # BRANCH_TO_ANDROIDLOGPRINT
+
+                    rb'(......(?:.\xd1|\x02\xbf|.{6}\x02\xbf)(.\x46))'  # ORIGINAL_CODE_2 & MOV_R0_RSTRUCT
                 ),
                 replacement=(
                     b'\\1' +
-                    asm('nop', False) * 10 +
+                    asm('nop', False) * 13 +
+                    b'\\5'
+                )
+            ),
+            LibModificationPattern(
+                name='Exynos 9610/9611 (Android 11) (32-bit)',
+                is_64bit=False,
+                pattern=(
+                    rb'()' # ORIGINAL_CODE_1
+                    
+                    rb'.......\x46.\x44.\xe9..'
+                    rb'(\x04.)' # MOV_RX_FOUR
+                    rb'()' # MOV_WX_X
+                    rb'.\xe9.......\x44.\x44(....)' # BRANCH_TO_ANDROIDLOGPRINT
+
+                    rb'(......\x02\xbf(.\x46))' # ORIGINAL_CODE_2 & MOV_R0_RSTRUCT
+                ),
+                replacement=(
+                    b'\\1' +
+                    asm('nop', False) * 16 +
+                    b'\\5'
+                )
+            ),
+            LibModificationPattern(
+                name='Exynos 850/1280/9611 (Android 12-14) (32-bit)',
+                is_64bit=False,
+                pattern=(
+                    rb'()' # ORIGINAL_CODE_1
+
+                    rb'.......\xe9...\x46.\x44.\xe9..'
+                    rb'(\x04.)' # MOV_RX_FOUR
+                    rb'()' # MOV_WX_X
+                    rb'.....\x44.\x44(....)' # BRANCH_TO_ANDROIDLOGPRINT
+
+                    rb'(.....(?:\x44.....)?\x42..(.\x46))' # ORIGINAL_CODE_2 & MOV_R0_RSTRUCT
+                ),
+                replacement=(
+                    b'\\1' +
+                    asm('nop', False) * 16 +
                     b'\\5'
                 )
             ),
@@ -319,17 +341,19 @@ def build_sensor_info_struct_mod(
                 name='Exynos 1280/7884/7904/9825 (Android 9) (32-bit)',
                 is_64bit=False,
                 pattern=(
+                    rb'()' # ORIGINAL_CODE_1
+
                     rb'.\x49.\x4a.\x4b....'
-                    rb'(.\xe8\x91\x00)' # ORIGINAL_CODE_1
+                    rb'.\xe8\x91\x00'
                     rb'(\x04.)' # MOV_RX_FOUR
                     rb'()' # MOV_WX_X
                     rb'.\x44.\x44.\x44(....)' # BRANCH_TO_ANDROIDLOGPRINT
+
                     rb'(...\x44.........\xd1(.\x46))' # ORIGINAL_CODE_2 & MOV_R0_RSTRUCT
                 ),
                 replacement=(
-                    asm('nop', False) * 5 +
                     b'\\1' +
-                    asm('nop', False) * 6 +
+                    asm('nop', False) * 13 +
                     b'\\5'
                 )
             ),
@@ -337,49 +361,19 @@ def build_sensor_info_struct_mod(
                 name='Exynos 9610/9611 (Android 9) (32-bit)',
                 is_64bit=False,
                 pattern=(
-                    rb'(\x4f\xf4...\xe9...\x46)' # ORIGINAL_CODE_1
+                    rb'()' # ORIGINAL_CODE_1
+
+                    rb'\x4f\xf4...\xe9...\x46'
                     rb'.........\x44...\x44.\x44'
                     rb'(\x04.)' # MOV_RX_FOUR
                     rb'()' # MOV_WX_X
                     rb'(....)' # BRANCH_TO_ANDROIDLOGPRINT
+
                     rb'(.....\x44......\x02\xbf(.\x46))' # ORIGINAL_CODE_2 & MOV_R0_RSTRUCT
                 ),
                 replacement=(
                     b'\\1' +
-                    asm('nop', False) * 11 +
-                    b'\\5'
-                )
-            ),
-            LibModificationPattern(
-                name='Exynos 1280 (Android 14) (32-bit)',
-                is_64bit=False,
-                pattern=(
-                    # This is the last part of the android::createExynosCameraSensorInfo function, corresponding
-                    # to _android_log_print(4, "ExynosCameraSensorInfo", "INFO(%s[%d]):sensor ID %d name %s", ...)
-
-                    # MOV.W R0, 0x2CC - should be fine to replace, because it's only used in the log
-                    rb'\x4f\xf4\x33\x70'
-
-                    # STMEA - Unsure if it's safe to replace this with a NOP
-                    rb'(.{8}.\xe8\x11\x01|.{8}.\xe8\x91\x00|.{8}.\xe9\x00\x10)' # ORIGINAL_CODE_2 - won't be modified
-
-                    # MOVS RX, #4. We'll remember which register RX is since it's safe to modify it
-                    rb'(\x04.)' # MOV_RX_FOUR
-                    rb'()' # MOV_WX_X - only present in 64-bit patterns
-                    rb'.....\x44.\x44'
-                    rb'(....)' # BRANCH_TO_ANDROIDLOGPRINT
-
-                    # ORIGINAL_CODE_3 - won't be modified
-                    rb'(......(?:.\xd1|\x02\xbf|.{6}\x02\xbf)'
-                        # MOV r0, RSTRUCT. RSTRUCT contains the address of the ExynosCameraSensorInfo struct
-                        rb'(.\x46)' # MOV_R0_RSTRUCT
-                    rb')'
-                ),
-                replacement=(
-                    asm('nop', False) * 2 +
-                    b'\\1' +
-                    # These NOPs will be replaced with our mod instructions
-                    asm('nop', False) * 7 +
+                    asm('nop', False) * 16 +
                     b'\\5'
                 )
             ),

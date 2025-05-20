@@ -1,67 +1,76 @@
 import unittest
+
 from patch_lib import *
 
+
 class LibData:
-    def __init__(self, path: str,
-                 hw_level_offset: int, available_cap_offset: int):
+    def __init__(
+            self, path: str,
+            hw_level_offset: int, available_cap_offset: int,
+            modifiable_chunks: list[str]|None = None
+        ):
         self.path = path
         self.hw_level_offset = hw_level_offset
         self.available_cap_offset = available_cap_offset
 
+        modifiable_chunks = modifiable_chunks or []
+        self.modifiable_chunks = [
+            bytes.fromhex(chunk) for chunk in modifiable_chunks
+        ]
 
         with open(path, "rb") as f:
             self.data = f.read()
 
 LIBS = [
     # Exynos 850
-    LibData("libs/a12-nacho_t.so", 0x648, 0x650),
+    LibData("libs/a12-nacho_t.so",    0x648, 0x650, ["294940F21E20CDE9025823467944CDE9001004202549264A79447A4413F1A2E9"]),
     LibData("libs/a12-nacho_t_64.so", 0x79c, 0x7a0),
-    LibData("libs/a13_u.so", 0x640, 0x648),
+    LibData("libs/a13_u.so",          0x640, 0x648, ["274940F25520CDE9025823467944CDE9001004202349244A79447A4412F19CEF"]),
     # Exynos 990
-    LibData("libs/note20ultra_u.so", 0x8c0, 0x8c8),
+    LibData("libs/note20ultra_u.so",    0x8c0, 0x8c8, ["4FF492608DE8110104200F49104A104B79447A447B4438F136ED"]),
     LibData("libs/note20ultra_u_64.so", 0xa1c, 0xa20),
-    LibData("libs/s20ultra_u.so", 0x8d0, 0x8d8),
-    LibData("libs/s20ultra_u_64.so", 0xa2c, 0xa30),
+    LibData("libs/s20ultra_u.so",       0x8d0, 0x8d8, ["40F26A408DE8110104200F49104A104B79447A447B443EF190E9"]),
+    LibData("libs/s20ultra_u_64.so",    0xa2c, 0xa30),
     # Exynos 1280
-    LibData("libs/a53_t.so", 0x8b8, 0x8c0),
+    LibData("libs/a53_t.so",    0x8b8, 0x8c0, ["40F203408DE8110104201649164A174B79447A447B444EF130EB"]),
     LibData("libs/a53_t_64.so", 0xa14, 0xa18),
-    LibData("libs/m34_t.so", 0x8b8, 0x8c0),
+    LibData("libs/m34_t.so",    0x8b8, 0x8c0, ["40F2FA208DE8110104201349144A144B79447A447B4451F194EA"]),
     LibData("libs/m34_t_64.so", 0xa14, 0xa18),
-    LibData("libs/a33_u.so", 0x8c0, 0x8c8),
+    LibData("libs/a33_u.so",    0x8c0, 0x8c8, ["2A494FF43370CDE902584B467944CDE9001004202649264A79447A444FF10CEB"]),
     LibData("libs/a33_u_64.so", 0xa1c, 0xa20),
     # Exynos 7884/7904
-    LibData("libs/a20_p.so", 0x594, 0x598),
-    LibData("libs/a20_p_64.so", 0x6e8, 0x6f0),
-    LibData("libs/a20_r.so", 0x630, 0x638),
-    LibData("libs/a20_r_64.so", 0x784, 0x788),
-    LibData("libs/a20e_r.so", 0x630, 0x638),
-    LibData("libs/a30_p.so", 0x54c, 0x550),
-    LibData("libs/a30_p_64.so", 0x6a0, 0x6a8),
-    LibData("libs/a30_q.so", 0x5f0, 0x5f8),
-    LibData("libs/a30_q_64.so", 0x73c, 0x740),
-    LibData("libs/a30_r.so", 0x630, 0x638),
-    LibData("libs/a30s_q.so", 0x5f0, 0x5f8),
+    LibData("libs/a20_p.so",     0x594, 0x598, ["1749184A184B40F257108DE89100042079447A447B44B4F0C9FB"]),
+    LibData("libs/a20_p_64.so",  0x6e8, 0x6f0),
+    LibData("libs/a20_r.so",     0x630, 0x638, ["40F25F108DE8110104201349144A144B79447A447B44BDF0CCEF"]),
+    LibData("libs/a20_r_64.so",  0x784, 0x788),
+    LibData("libs/a20e_r.so",    0x630, 0x638, ["4FF4AD708DE8110104201249134A134B79447A447B44BDF0F6EF"]),
+    LibData("libs/a30_p.so",     0x54c, 0x550, ["1749184A184B40F24F108DE89100042079447A447B44BDF047FC"]),
+    LibData("libs/a30_p_64.so",  0x6a0, 0x6a8),
+    LibData("libs/a30_q.so",     0x5f0, 0x5f8, ["40F257108DE8110104201449144A154B79447A447B44C5F034EC"]),
+    LibData("libs/a30_q_64.so",  0x73c, 0x740),
+    LibData("libs/a30_r.so",     0x630, 0x638, ["4FF4AC708DE8110104201449144A154B79447A447B44C8F06CE8"]),
+    LibData("libs/a30s_q.so",    0x5f0, 0x5f8, ["4FF4FC708DE8110104201449144A154B79447A447B44E7F014EB"]),
     LibData("libs/a30s_q_64.so", 0x73c, 0x740),
-    LibData("libs/a30s_r.so", 0x630, 0x638),
-    LibData("libs/a40_r.so", 0x630, 0x638),
-    LibData("libs/a40_r_64.so", 0x784, 0x788),
+    LibData("libs/a30s_r.so",    0x630, 0x638, ["4FF4FC708DE8110104201449144A154B79447A447B44E7F06CED"]),
+    LibData("libs/a40_r.so",     0x630, 0x638, ["4FF4BF708DE8110104201349134A144B79447A447B44CAF0AEEC"]),
+    LibData("libs/a40_r_64.so",  0x784, 0x788),
     # Exynos Exynos 9610/9611
-    LibData("libs/a50_p.so", 0x54c, 0x550),
-    LibData("libs/a50_p_64.so", 0x6a0, 0x6a8),
-    LibData("libs/a50_q.so", 0x5f0, 0x5f8),
-    LibData("libs/a50_q_64.so", 0x73c, 0x740),
-    LibData("libs/a50s_r.so", 0x630, 0x638),
-    LibData("libs/a51_r.so", 0x630, 0x638),
-    LibData("libs/m30s_r.so", 0x5f8, 0x600),
-    LibData("libs/m31_r.so", 0x630, 0x638),
-    LibData("libs/m31s_s.so", 0x640, 0x648),
-    LibData("libs/m31s_s_64.so", 0x794, 0x798),
-    LibData("libs/tabs6lite_q.so", 0x600, 0x608),
+    LibData("libs/a50_p.so",          0x54c, 0x550, ["4FF4F170CDE902582346019021482249224A7844009079447A440420E2F0BEF9"]),
+    LibData("libs/a50_p_64.so",       0x6a0, 0x6a8),
+    LibData("libs/a50_q.so",          0x5f0, 0x5f8, ["27494FF44B7043467944CDE900100420CDE902592349234A79447A44E9F020EE"]),
+    LibData("libs/a50_q_64.so",       0x73c, 0x740),
+    LibData("libs/a50s_r.so",         0x630, 0x638, ["27494FF4FF704B467944CDE900100420CDE902582349244A79447A44EAF088EA"]),
+    LibData("libs/a51_r.so",          0x630, 0x638, ["274940F259204B467944CDE900100420CDE902582349244A79447A44EBF040EE"]),
+    LibData("libs/m30s_r.so",         0x5f8, 0x600, ["28494FF403704B467944CDE900100420CDE902582449254A79447A44EDF022EE"]),
+    LibData("libs/m31_r.so",          0x630, 0x638, ["274940F25F204B467944CDE900100420CDE902582349244A79447A44E9F0C0EE"]),
+    LibData("libs/m31s_s.so",         0x640, 0x648, ["274940F26320CDE902584B467944CDE9001004202349244A79447A44EAF0BCEB"]),
+    LibData("libs/m31s_s_64.so",      0x794, 0x798),
+    LibData("libs/tabs6lite_q.so",    0x600, 0x608, ["AA208DE8110104201149114A124B79447A447B44C2F01AEB"]),
     LibData("libs/tabs6lite_q_64.so", 0x74c, 0x750),
-    LibData("libs/tabs6lite_t.so", 0x640, 0x648),
+    LibData("libs/tabs6lite_t.so",    0x640, 0x648, ["AC208DE8910004201249124A134B79447A447B44C4F010E8"]),
     LibData("libs/tabs6lite_t_64.so", 0x794, 0x798),
     # Exynos 9825
-    LibData("libs/f62_r.so", 0x768, 0x770),
+    LibData("libs/f62_r.so", 0x768, 0x770, ["40F206308DE8110104201449144A154B79447A447B44EDF0C8EB"]),
 ]
 
 class TestLibs(unittest.TestCase):
@@ -74,9 +83,43 @@ class TestLibs(unittest.TestCase):
                 (lib.available_cap_offset, lib.hw_level_offset)
             )
 
-    def test_build_sensor_info_struct_mod(self):
+    def test_sensor_info_struct_mod(self):
         for lib in LIBS:
             print(lib.path)
 
-            # Ensure that at least one pattern matched the lib
-            build_sensor_info_struct_mod(lib.data)
+            mod = build_sensor_info_struct_mod(lib.data)
+            pattern = mod.try_match(lib.data)[0]
+            patched = mod.try_patch(lib.data)
+            self.assertIsNotNone(patched)
+            self.assertIsNotNone(pattern)
+            self.assertEqual(len(patched), len(lib.data))
+
+            if len(lib.modifiable_chunks) == 0:
+                continue
+
+            # Since we didn't pass any args to build_sensor_info_struct_mod,
+            # the whole modifiable chunks should be replaced with NOPs
+            nop = asm('nop', pattern.is_64bit)
+            expected_nops = sum([len(chunk) for chunk in lib.modifiable_chunks]) / len(nop)
+
+            found_nops = 0
+            i = 0
+            while i < len(patched):
+                if patched[i] != lib.data[i]:
+                    start = i
+                    while i < len(patched):
+                        if patched[i:(i + len(nop))] != nop:
+                            break
+
+                        i += len(nop)
+                        found_nops += 1
+
+                    chunk = lib.data[start:i]
+                    for expected_chunk in lib.modifiable_chunks:
+                        self.assertIn(expected_chunk, lib.data)
+                        self.assertNotIn(expected_chunk, patched)
+                        self.assertIn(chunk, expected_chunk)
+
+                i += 1
+
+            self.assertEqual(found_nops, expected_nops)
