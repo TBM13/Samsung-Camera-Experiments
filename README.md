@@ -81,17 +81,20 @@ If Android doesn't show show any cameras, this means the camera lib crashed:
 ## GCam tests after enabling the RAW capability
 **Note:** If you test this on a device not listed here or you have any issue/weird behaviour, please let me know.
 
-All tests were done using [BSG's GCam 8.1](https://www.celsoazevedo.com/files/android/google-camera/dev-bsg/f/dl88/), as it seems to be the most stable one on Exynos devices.
-|Device Name|SoC|GCam Works?|Details / Issues|
+Most tests were done using [BSG's GCam 8.1](https://www.celsoazevedo.com/files/android/google-camera/dev-bsg/f/dl88/), as it seems to be the most stable one on Exynos devices that do have GCam working.
+|Device Name|SoC|GCam Works?|Notes|
 |:-:|:--:|:-:|:-:|
 |Galaxy A12 Nacho (A12s)|Exynos 850|X|<table><th>Android 11</th><th>Android 13</th><tr><td>Freezes</td><td>Lags/freezes. Back cam doesn't save pics and front cam sometimes does</td></tr></table>|
-|Galaxy A20|Exynos 7884|✓|<table><th>Android 10</th><th>Android 11</th><tr><td>Freezes</td><td>May freeze & reboot while using GCam</td></tr></table>|
-|Galaxy A20e|Exynos 7884|✓|<table><th>Android 10</th><th>Android 11</th><tr><td>Freezes</td><td>May freeze & reboot while using GCam</td></tr></table>|
-|Galaxy A30|Exynos 7904|✓|<table><th>Android 10</th><th>Android 11</th><tr><td>Freezes</td><td>May freeze & reboot while using GCam</td></tr></table>|
+|Galaxy A20|Exynos 7884|✓|<table><th>Android 10</th><th>Android 11</th><tr><td>Freezes</td><td>HDR works & pics are 10x better than with the stock cam.<br/>Very laggy, sometimes the phone reboots while using it.</td></tr></table>|
+|Galaxy A20e|Exynos 7884|✓|<table><th>Android 10</th><th>Android 11</th><tr><td>Freezes</td><td>HDR works & pics are 10x better than with the stock cam.<br/>Very laggy, sometimes the phone reboots while using it.</td></tr></table>|
+|Galaxy A30|Exynos 7904|✓|<table><th>Android 10</th><th>Android 11</th><tr><td>Freezes</td><td>HDR works & pics are 10x better than with the stock cam.<br/>Very laggy, sometimes the phone reboots while using it.<br/>On few devices the front cam pics are unusable due to bad resolution.</td></tr></table>|
 |Galaxy A30s|Exynos 7904|?|<table><th>Android 10</th><th>Android 11</th><tr><td>Freezes</td><td>Untested</td></tr></table>|
-|Galaxy A40|Exynos 7904|Partially|<table><th>Android 11</th><tr><td>Front cam pics unusable due to bad resolution. It's possible to fix, need to investigate how</td></tr></table>|
+|Galaxy A33|Exynos 1280|X|<table><th>Android 14</th><tr><td>Saves black pics when HDR is on</td></tr></table>|
+|Galaxy A40|Exynos 7904|Partially|<table><th>Android 11</th><tr><td>Front cam pics unusable due to bad resolution.<br/>It's possible to fix, need to investigate how</td></tr></table>|
 |Galaxy A50s|Exynos 9611|Partially|<table><th>Android 11</th><tr><td>Photos have pink tint. Changing black level doesn't help</td></tr></table>|
 |Galaxy A51|Exynos 9611|Partially|<table><th>Android 11</th><tr><td>Photos have pink tint. Changing black level doesn't help</td></tr></table>|
 |Galaxy F62|Exynos 9825|Partially|<table><th>Android 11</th><tr><td>Issues with the front camera</td></tr></table>|
 |Galaxy M31|Exynos 9611|Partially|<table><th>Android 11</th><tr><td>Photos have pink tint. Changing black level doesn't help</td></tr></table>|
 |Galaxy M31s|Exynos 9611|Partially|<table><th>Android 12</th><tr><td>Photos have pink tint. Changing black level doesn't help</td></tr></table>|
+
+As it can be seen, GCam only seems to be usable on the Exynos 7884/7904 series. As someone who had an A20, I can say that the difference in quality with the stock camera is huge. You can check that yourself with [this comparison](https://cdn.knightlab.com/libs/juxtapose/latest/embed/index.html?uid=9fea4384-35b8-11f0-bb24-0936e1cb08fb) of two pics I took a few years ago.
