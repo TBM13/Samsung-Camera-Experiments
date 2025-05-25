@@ -200,6 +200,23 @@ def find_capabilities_and_hw_level_offsets(lib_data: bytes) -> tuple[int, int]:
                     rb')'
                 ),
                 replacement=b'\\1'
+            ),
+            LibModificationPattern(
+                name='Galaxy XCover 5 (Android 14) (64-bit)',
+                is_64bit=True,
+                pattern=(
+                    # Fragment of android::ExynosCameraMetadataConverter::m_createAvailableCapabilities
+                    rb'('
+                    rb'\xd0\x3b\xd5...\xf9(?:.{4}|.{8}).\x03.\xaa(?:.{8})?...\xb4'
+                    # LDRB WX, [RX, #HW_LEVEL_OFFSET]
+                    rb'(...\x39)'
+                    rb'(?:.{4}|.{20})?'
+                    # LDR XX, [XX, #AVAILABLE_CAPABILITIES_OFFSET]
+                    rb'(...\xf9)'
+                    rb'.{4}...\x91.{4}...\x91.{4}...\x91.{4}...\x91'
+                    rb')'
+                ),
+                replacement=b'\\1'
             )
         ]
     )
@@ -367,7 +384,7 @@ def build_sensor_info_struct_mod(
             ######################### 64-BIT PATTERNS #########################
             ###################################################################
             LibModificationPattern(
-                name='Exynos 9610/9611 (Android 10-12) (64-bit)',
+                name='Exynos 850/9610/9611 (Android 10-14) (64-bit)',
                 is_64bit=True,
                 pattern=(
                     rb'(\x52|\x91....)' # ORIGINAL_CODE_1
@@ -478,7 +495,24 @@ def build_sensor_info_struct_mod(
                     asm('nop', True) * 11 +
                     b'\\' + str(Groups.ORIGINAL_CODE_2 + 1).encode()
                 )
-            )
+            ),
+            LibModificationPattern(
+                name='Galaxy XCover 5 (Android 14) (64-bit)',
+                is_64bit=True,
+                pattern=(
+                    rb'(\x1f\x20\x03\xd5)' # ORIGINAL_CODE_1
+                    rb'.{8}...\x91.{4}...\x91...\x91'
+                    rb'.{4}.\x03.\x2a'
+                    rb'(?:...\x52|...\x32)'
+                    rb'.\x03.\x2a(....)' # BRANCH_TO_ANDROIDLOGPRINT
+                    rb'((?:.{4})?...\xf9.{4}...\xeb...\x54(.\x03.\xaa)(?:.{4})?...\xa9...\xa9...\xa9)' # ORIGINAL_CODE_2 & MOV_R0_RSTRUCT
+                ),
+                replacement=(
+                    b'\\' + str(Groups.ORIGINAL_CODE_1 + 1).encode() +
+                    asm('nop', True) * 11 +
+                    b'\\' + str(Groups.ORIGINAL_CODE_2 + 1).encode()
+                )
+            ),
         ]
     )
 
