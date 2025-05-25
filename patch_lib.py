@@ -206,7 +206,7 @@ def find_capabilities_and_hw_level_offsets(lib_data: bytes) -> tuple[int, int]:
 
     pattern, match = mod.try_match(lib_data)
     if pattern is None or match is None:
-        sys.exit(1)
+        abort('Pattern not found')
 
     hw_offset = disasm_ldr(match[1], pattern.is_64bit)[2]
     cap_offset = disasm_ldr(match[2], pattern.is_64bit)[2]
@@ -223,7 +223,8 @@ def find_capabilities_and_hw_level_offsets(lib_data: bytes) -> tuple[int, int]:
 
 def build_sensor_info_struct_mod(
         lib_data: bytes,
-        capabilities: list[int]|None = None,
+        enable_capabilities: list[int]|None = None,
+        disable_capabilities: list[int]|None = None,
         hw_level: int|None = None,
         skip_depth_cameras: bool = False
     ) -> LibModification:
@@ -483,7 +484,7 @@ def build_sensor_info_struct_mod(
 
     pattern, match = mod.try_match(lib_data)
     if pattern is None or match is None:
-        sys.exit(1)
+        abort('Pattern not found')
 
     # Ensure the last instruction we replaced with a NOP is a branch
     last_ins = disasm(match[Groups.BRANCH_TO_ANDROIDLOGPRINT], pattern.is_64bit)[0]
@@ -509,24 +510,27 @@ def build_sensor_info_struct_mod(
         required_nops = 0
         for ins in instructions:
             required_nops += int(len(ins) / len(nop))
+            current_position += len(ins)
 
         # ensure the required NOPs are consecutive, since some patterns may keep
         # original instructions between NOPs and that could mess up the instruction order
         if rep.count(nop * required_nops) <= 0:
-            print('[!] Pattern has not enough space left, try again with less modifications')
-            sys.exit(1)
+            abort('Pattern has not enough space left, try again with less modifications')
 
         rep = rep.replace(
             nop * required_nops, b''.join(instructions), 1
         )
-        current_position += required_nops * len(nop)
 
     # Find struct offsets
     available_cap_offset, hw_lvl_offset = find_capabilities_and_hw_level_offsets(lib_data)
 
     # Lets start with modifications that require reading the value of
     # available capabilities, so we only need a single LDR instruction
-    if skip_depth_cameras or capabilities is not None:
+    if (
+        skip_depth_cameras or
+        enable_capabilities is not None or
+        disable_capabilities is not None
+    ):
         replace_nops([
             asm(f'ldr {free_reg}, [{struct_reg}, #{available_cap_offset}]', pattern.is_64bit)
         ])
@@ -534,58 +538,76 @@ def build_sensor_info_struct_mod(
         # Add conditional branch to skip depth cameras
         if skip_depth_cameras:
             instructions = []
-            branch_offset = mod_len - current_position
+            branch_offset = mod_len - current_position # in bytes
 
             if pattern.is_64bit:
                 instructions.append(
-                    asm(f'tbnz {free_reg}, #7, {branch_offset}', True)
+                    asm(f'tbnz {free_reg}, #7, #{branch_offset}', pattern.is_64bit)
                 )
             else:
                 instructions.append(
-                    asm(f'TST {free_reg}, {Capability.DEPTH_OUTPUT}', False),
+                    asm(f'TST {free_reg}, {Capability.DEPTH_OUTPUT}', pattern.is_64bit),
                 )
                 branch_offset -= len(instructions[0])
                 instructions.append(
-                    asm(f'bne {branch_offset}', False)
+                    asm(f'bne #{branch_offset}', pattern.is_64bit)
                 )
 
             replace_nops(instructions)
             print('[+] Added conditional to skip depth cameras')
 
         # Modify available capabilities
-        if capabilities is not None:
-            value = 0
-            enabled_caps = []
-            for cap in capabilities:
-                value |= cap
-                enabled_caps.append(Capability(cap).name)
+        instructions = []
 
-            instructions = []
-            # ORR in ARM64 doesn't support many immediate values. If it works for value then great,
-            # otherwise we need to store value into another register first
+        if enable_capabilities is not None:
+            value = 0
+            for cap in enable_capabilities:
+                value |= cap
+
             try:
                 instructions.append(
                     asm(f'orr {free_reg}, {free_reg}, #{value}', pattern.is_64bit)
                 )
             except KsError:
-                if not pattern.is_64bit:
-                    raise KsError('Unknown error')
-
-                instructions.append(
-                    asm(f'mov {free_reg2}, #{value}', pattern.is_64bit)
-                )
-                instructions.append(
+                # ORR doesn't support the immediate value, so store it in a register
+                instructions.extend([
+                    asm(f'mov {free_reg2}, #{value}', pattern.is_64bit),
                     asm(f'orr {free_reg}, {free_reg}, {free_reg2}', pattern.is_64bit)
-                )
+                ])
 
+
+        if disable_capabilities is not None:
+            mask = 0xFFFF
+            for cap in disable_capabilities:
+                mask &= ~cap
+
+            try:
+                instructions.append(
+                    asm(f'and {free_reg}, {free_reg}, #{mask}', pattern.is_64bit)
+                )
+            except KsError:
+                # AND doesn't support the immediate value, so store it in a register
+                instructions.extend([
+                    asm(f'mov {free_reg2}, #{mask}', pattern.is_64bit),
+                    asm(f'and {free_reg}, {free_reg}, {free_reg2}', pattern.is_64bit)
+                ])
+
+        if len(instructions) > 0:
             instructions.append(
                 asm(f'str {free_reg}, [{struct_reg}, #{available_cap_offset}]', pattern.is_64bit)
             )
             replace_nops(instructions)
-            print(f'[+] Enabled capabilities: {", ".join(enabled_caps)}')
+            
+            if enable_capabilities is not None:
+                caps = ', '.join([Capability(x).name for x in enable_capabilities])
+                print(f'[+] Enabled capabilities: {caps}')
+            if disable_capabilities is not None:
+                caps = ', '.join([Capability(x).name for x in disable_capabilities])
+                print(f'[+] Disabled capabilities: {caps}')
 
     # Set hardware level
     if hw_level is not None:
+        # movs is smaller than mov
         mov = 'mov' if pattern.is_64bit else 'movs'
         replace_nops([
             asm(f'{mov} {free_reg}, #{hw_level}', pattern.is_64bit),
@@ -607,34 +629,39 @@ def parse_args() -> argparse.Namespace:
 
     mod_options = parser.add_argument_group('Lib Modifications')
     mod_options.add_argument(
-        '-hw', type=int,
+        '--hardware-level', type=int,
         choices=list(HardwareLevel),
         help='The hardware level that will be set'
     )
     mod_options.add_argument(
-        '-cap', type=int,
+        '--enable-cap', type=int,
         choices=list(Capability), nargs='+',
         help='The capabilities that will be enabled, separated by spaces'
+    )
+    mod_options.add_argument(
+        '--disable-cap', type=int,
+        choices=list(Capability), nargs='+',
+        help='The capabilities that will be disabled, separated by spaces'
     )
     mod_options.add_argument(
         '--skip-depth', action='store_true',
         help=(
             'Skips modifications on cameras with the "Depth Output" capability. '
-            'Recommended if your device has a depth camera since the lib can crash if you enable RAW on them, for example.'
+            'Recommended if your device has a depth camera.'
         )
     )
 
     module_options = parser.add_argument_group(
         'Magisk Module',
-        'If all these settings are provided, a Magisk module with both patched libs will be created'
+        'If the following settings are provided, a Magisk module with the patched lib(s) will be created'
     )
     module_options.add_argument(
         '--model', type=str,
-        help='The device model (e.g. Galaxy A20)'
+        help='The device the lib comes from (e.g. Galaxy A20)'
     )
     module_options.add_argument(
         '--android-version', type=int,
-        help='The Android version (e.g. 11)'
+        help='The Android version the lib comes from (e.g. 11)'
     )
     module_options.add_argument(
         '--version', type=int,
@@ -645,9 +672,10 @@ def parse_args() -> argparse.Namespace:
 
 def main():
     args = parse_args()
-    if args.cap is None and args.hw is None:
-        print('[!] No modifications specified')
-        sys.exit(1)
+    if (args.hardware_level is None and
+        args.enable_cap is None and 
+        args.disable_cap is None):
+        abort('No modifications specified')
 
     out_libs: list[str] = []
     for file in args.libs:
@@ -660,7 +688,10 @@ def main():
 
         print(f'\n[*] Patching "{file.name}"...')
         mod = build_sensor_info_struct_mod(
-            data, capabilities=args.cap, hw_level=args.hw,
+            lib_data=data,
+            enable_capabilities=args.enable_cap,
+            disable_capabilities=args.disable_cap,
+            hw_level=args.hardware_level,
             skip_depth_cameras=args.skip_depth
         )
 
@@ -679,28 +710,28 @@ def main():
         and args.android_version is not None
         and args.version is not None
     ):
-        modifications=''
-        if args.cap is not None:
-            modifications += (
-                'enables ' + ', '.join([Capability(x).name for x in args.cap]) + ' capabilities'
+        mods = ''
+        if args.enable_cap is not None:
+            mods += (
+                'enables [' + ', '.join([Capability(x).name for x in args.enable_cap]) + '], '
             )
-        if args.hw is not None:
-            if len(modifications) > 0:
-                modifications += ' and '
-            modifications += f'sets the hardware level to {HardwareLevel(args.hw).name}'
+        if args.disable_cap is not None:
+            mods += (
+                'disables [' + ', '.join([Capability(x).name for x in args.disable_cap]) + '], '
+            )
+        if args.hardware_level is not None:
+            mods += f'sets the hardware level to {HardwareLevel(args.hardware_level).name}, '
 
-        modifications = modifications[0].upper() + modifications[1:]
-
+        mods = mods[0].upper() + mods[1:-2]
         create_magisk_module(
             out_libs, args.model,
-            str(args.android_version), str(args.version), modifications
+            str(args.android_version), str(args.version), mods
         )        
 
 def apply_modification(lib_data: bytes, mod: LibModification) -> bytes:
     patched_data = mod.try_patch(lib_data)
     if patched_data is None:
-        print(f'[!] Could not apply "{mod.name}"')
-        sys.exit(1)
+        abort(f'Could not apply "{mod.name}"')
 
     print(f'[+] Applied "{mod.name}"')
     return patched_data
@@ -711,8 +742,7 @@ def create_magisk_module(
         modifications: str
     ):
     if len(libs) > 2:
-        print('[!] Too many libs provided')
-        sys.exit(1)
+        abort('Too many libs provided')
 
     lib32 = None
     lib64 = None
@@ -726,13 +756,11 @@ def create_magisk_module(
 
     assert lib32 is not None or lib64 is not None
     if len(libs) == 2 and (lib32 is None or lib64 is None):
-        print('[!] Two libs of the same architecture provided')
-        sys.exit(1)
+        abort('Two libs of the same architecture were provided')
 
     module_base_dir = os.path.join(os.getcwd(), 'ModuleBase')
     if not os.path.isdir(module_base_dir):
-        print(f'"[!] {module_base_dir}" not found')
-        sys.exit(1)
+        abort(f'"{module_base_dir}" not found')
 
     tmp_dir = module_base_dir + 'Temp'
     if os.path.isdir(tmp_dir):
@@ -769,6 +797,10 @@ def create_magisk_module(
 
     shutil.rmtree(tmp_dir)
     print(f'[*] Module saved as "{zip_file}"')
+
+def abort(msg: str):
+    print(f'\nAbort: {msg}')
+    sys.exit(1)
 
 if __name__ == '__main__':
     main()

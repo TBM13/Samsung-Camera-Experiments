@@ -41,8 +41,9 @@ Keep in mind that enabling them **doesn't mean they will work as expected** nor 
 
 ## Usage
 ```
-usage: patch_lib.py [-h] [-hw {0,1,2,3,4}]
-                    [-cap {2,4,8,16,32,64,128,256,512,1024,2048} [{2,4,8,16,32,64,128,256,512,1024,2048} ...]]
+usage: patch_lib.py [-h] [--hardware-level {0,1,2,3,4}]
+                    [--enable-cap {2,4,8,16,32,64,128,256,512,1024,2048} [{2,4,8,16,32,64,128,256,512,1024,2048} ...]]
+                    [--disable-cap {2,4,8,16,32,64,128,256,512,1024,2048} [{2,4,8,16,32,64,128,256,512,1024,2048} ...]]
                     [--skip-depth] [--model MODEL] [--android-version ANDROID_VERSION] [--version VERSION]
                     libs [libs ...]
 
@@ -53,25 +54,28 @@ options:
   -h, --help            show this help message and exit
 
 Lib Modifications:
-  -hw {0,1,2,3,4}       The hardware level that will be set
-  -cap {2,4,8,16,32,64,128,256,512,1024,2048} [{2,4,8,16,32,64,128,256,512,1024,2048} ...]
+  --hardware-level {0,1,2,3,4}
+                        The hardware level that will be set
+  --enable-cap {2,4,8,16,32,64,128,256,512,1024,2048} [{2,4,8,16,32,64,128,256,512,1024,2048} ...]
                         The capabilities that will be enabled, separated by spaces
+  --disable-cap {2,4,8,16,32,64,128,256,512,1024,2048} [{2,4,8,16,32,64,128,256,512,1024,2048} ...]
+                        The capabilities that will be disabled, separated by spaces
   --skip-depth          Skips modifications on cameras with the "Depth Output" capability. Recommended if your device
-                        has a depth camera since the lib can crash if you enable RAW on them, for example.
+                        has a depth camera.
 
 Magisk Module:
-  If all these settings are provided, a Magisk module with both patched libs will be created
+  If the following settings are provided, a Magisk module with the patched lib(s) will be created
 
-  --model MODEL         The device model (e.g. Galaxy A20)
+  --model MODEL         The device the lib comes from (e.g. Galaxy A20)
   --android-version ANDROID_VERSION
-                        The Android version (e.g. 11)
+                        The Android version the lib comes from (e.g. 11)
   --version VERSION     The module version (e.g. 1)
 ```
 
 ### Example
-`python3 ./patch_lib.py libexynoscamera3.so -cap 16` will enable the RAW capability. This should be enough to make GCam work.
+`python3 ./patch_lib.py libexynoscamera3.so --enable-cap 16` will enable the RAW capability. This should be enough to make GCam work.
 
-`python3 ./patch_lib.py libexynoscamera3.so -hw 1 -cap 16 32` will enable the RAW & ZSL capabilities and set the hardware level to FULL.
+`python3 ./patch_lib.py libexynoscamera3.so --enable-cap 16 32 --hardware-level 1` will enable the RAW & ZSL capabilities and set the hardware level to FULL.
 
 ## Troubleshooting
 If Android doesn't show show any cameras, this means the camera lib crashed:
