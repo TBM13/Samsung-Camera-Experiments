@@ -91,6 +91,7 @@ Most tests were done using [BSG's GCam 8.1](https://www.celsoazevedo.com/files/a
 |Galaxy A12 Nacho (A12s)|Exynos 850|X|<table><th>Android 11</th><th>Android 13</th><tr><td>Freezes</td><td>Lags/freezes. Back cam doesn't save pics and front cam sometimes does</td></tr></table>|
 |Galaxy A20|Exynos 7884|✓|<table><th>Android 10</th><th>Android 11</th><tr><td>Freezes</td><td>HDR works & pics are 10x better than with the stock cam.<br/>Very laggy, sometimes the phone reboots while using it.</td></tr></table>|
 |Galaxy A20e|Exynos 7884|✓|<table><th>Android 10</th><th>Android 11</th><tr><td>Freezes</td><td>HDR works & pics are 10x better than with the stock cam.<br/>Very laggy, sometimes the phone reboots while using it.</td></tr></table>|
+|Galaxy A25|Exynos 1280|✓|<table><th>Android 14</th><tr><td>HDR works. Not much difference in quality with the stock cam.<br/>Laggy.</td></tr></table>|
 |Galaxy A30|Exynos 7904|✓|<table><th>Android 10</th><th>Android 11</th><tr><td>Freezes</td><td>HDR works & pics are 10x better than with the stock cam.<br/>Very laggy, sometimes the phone reboots while using it.<br/>On few devices the front cam pics are unusable due to bad resolution.</td></tr></table>|
 |Galaxy A30s|Exynos 7904|?|<table><th>Android 10</th><th>Android 11</th><tr><td>Freezes</td><td>Untested</td></tr></table>|
 |Galaxy A33|Exynos 1280|X|<table><th>Android 14</th><tr><td>Saves black pics when HDR is on</td></tr></table>|
