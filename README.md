@@ -101,5 +101,6 @@ Most tests were done using [BSG's GCam 8.1](https://www.celsoazevedo.com/files/a
 |Galaxy F62|Exynos 9825|Partially|<table><th>Android 11</th><tr><td>Issues with the front camera</td></tr></table>|
 |Galaxy M31|Exynos 9611|Partially|<table><th>Android 11</th><tr><td>Photos have pink tint. Changing black level doesn't help</td></tr></table>|
 |Galaxy M31s|Exynos 9611|Partially|<table><th>Android 12</th><tr><td>Photos have pink tint. Changing black level doesn't help</td></tr></table>|
+|Galaxy M34 5G|Exynos 1280|X|<table><th>Android 13</th><tr><td>Saves black pics when HDR is on</td></tr></table>|
 
 As it can be seen, GCam only seems to be usable on the Exynos 7884/7904 series. As someone who had an A20, I can say that the difference in quality with the stock camera is huge. You can check that yourself with [this comparison](https://cdn.knightlab.com/libs/juxtapose/latest/embed/index.html?uid=9fea4384-35b8-11f0-bb24-0936e1cb08fb) of two pics I took a few years ago.
