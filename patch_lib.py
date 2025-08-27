@@ -157,12 +157,12 @@ def find_capabilities_and_hw_level_offsets(lib_data: bytes) -> tuple[int, int]:
                 pattern=(
                     # Fragment of android::ExynosCameraMetadataConverter::m_createAvailableCapabilities
                     rb'('
-                    rb'.\xb0.\x46...\x46.\x46...\x44.......\xd0...\xf8..'
+                    rb'.\xb0.\x46.{2}.\x46.\x46.{2}.\x44.{2}.{2}.{2}.\xd0.{2}.\xf8..'
                     # LDRB RX, [RX, #HW_LEVEL_OFFSET]
                     rb'(.\xf8..)'
                     # LDR RX, [RX, #AVAILABLE_CAPABILITIES_OFFSET]
                     rb'(.\xf8..)'
-                    rb'....\x4f\xf0'
+                    rb'.{2}.{2}\x4f\xf0..'
                     rb')'
                 ),
                 replacement=b'\\1'
@@ -173,7 +173,7 @@ def find_capabilities_and_hw_level_offsets(lib_data: bytes) -> tuple[int, int]:
                 pattern=(
                     # Fragment of android::ExynosCameraMetadataConverter::m_createAvailableCapabilities
                     rb'('
-                    rb'.\xb0.\x46(?:.{4}|.{6}).\x44(?:.{6}|.{10}).\xf0..(?:.{2}).\xf0..(?:.{0}|.{2})'
+                    rb'.\xb0.\x46(?:.{4}|.{6}).\x44(?:.{6}|.{10}).\xf0...{2}.\xf0..(?:.{0}|.{2})'
                     # LDRB RX, [RX, #HW_LEVEL_OFFSET]
                     rb'(.\xf8..)'
                     rb'(?:.{0}|.{4}|.{6})'
@@ -190,34 +190,17 @@ def find_capabilities_and_hw_level_offsets(lib_data: bytes) -> tuple[int, int]:
                 pattern=(
                     # Fragment of android::ExynosCameraMetadataConverter::m_createAvailableCapabilities
                     rb'('
-                    rb'\xd0\x3b\xd5...\xf9(?:.{4}|.{8}).\x03.\xaa(?:.{8})?...\xb4'
+                    rb'.\xd0\x3b\xd5...\xf9(?:.{4}|.{8}).\x03.\xaa(?:.{0}|.{8})...\xb4'
                     # LDRB WX, [RX, #HW_LEVEL_OFFSET]
                     rb'(...\x39)'
-                    rb'(?:.{4}|.{20})?'
+                    rb'(?:.{0}|.{4}|.{20})'
                     # LDR XX, [XX, #AVAILABLE_CAPABILITIES_OFFSET]
                     rb'(...\xf9)'
-                    rb'(?:.{16}|.{20})?...\x91...\x91...\x91...\x91'
+                    rb'(?:(?:.{0}|.{16}|.{20})(?:...\x91){4}|(?:.{4}...\x91){4})'
                     rb')'
                 ),
                 replacement=b'\\1'
             ),
-            LibModificationPattern(
-                name='Galaxy XCover 5 (Android 14) (64-bit)',
-                is_64bit=True,
-                pattern=(
-                    # Fragment of android::ExynosCameraMetadataConverter::m_createAvailableCapabilities
-                    rb'('
-                    rb'\xd0\x3b\xd5...\xf9(?:.{4}|.{8}).\x03.\xaa(?:.{8})?...\xb4'
-                    # LDRB WX, [RX, #HW_LEVEL_OFFSET]
-                    rb'(...\x39)'
-                    rb'(?:.{4}|.{20})?'
-                    # LDR XX, [XX, #AVAILABLE_CAPABILITIES_OFFSET]
-                    rb'(...\xf9)'
-                    rb'.{4}...\x91.{4}...\x91.{4}...\x91.{4}...\x91'
-                    rb')'
-                ),
-                replacement=b'\\1'
-            )
         ]
     )
 
