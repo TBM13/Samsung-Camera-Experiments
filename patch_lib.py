@@ -173,13 +173,13 @@ def find_capabilities_and_hw_level_offsets(lib_data: bytes) -> tuple[int, int]:
                 pattern=(
                     # Fragment of android::ExynosCameraMetadataConverter::m_createAvailableCapabilities
                     rb'('
-                    rb'.\xb0.\x46(?:.{5}|.{7})\x44.......\xf0.....\xf0(?:.{2}|.{4})'
+                    rb'.\xb0.\x46(?:.{4}|.{6}).\x44(?:.{6}|.{10}).\xf0..(?:.{2}).\xf0..(?:.{0}|.{2})'
                     # LDRB RX, [RX, #HW_LEVEL_OFFSET]
                     rb'(.\xf8..)'
-                    rb'(?:.{4}|.{6})?'
+                    rb'(?:.{0}|.{4}|.{6})'
                     # LDR RX, [RX, #AVAILABLE_CAPABILITIES_OFFSET]
                     rb'(.\xf8..)'
-                    rb'.\xf8'
+                    rb'(?:.{0}|.{4}).\xf8..'
                     rb')'
                 ),
                 replacement=b'\\1'
@@ -231,7 +231,7 @@ def find_capabilities_and_hw_level_offsets(lib_data: bytes) -> tuple[int, int]:
     print(f'Hardware level offset: {hex(hw_offset)}')
 
     # Both offsets are usually close to each other
-    if abs(cap_offset - hw_offset) > 64:
+    if abs(cap_offset - hw_offset) > 8:
         print('\033[33m[w] Big difference between offsets, one of them may be wrong\033[0m')
 
     assert isinstance(cap_offset, int) and isinstance(hw_offset, int)
@@ -379,6 +379,24 @@ def build_sensor_info_struct_mod(
                     b'\\' + str(Groups.ORIGINAL_CODE_2 + 1).encode()
                 )
             ),
+            LibModificationPattern(
+                name='Galaxy S21 FE (Exynos 2100) (Android 15) (32-bit)',
+                is_64bit=False,
+                pattern=(
+                    rb'()' # ORIGINAL_CODE_1
+
+                    rb'.{2}.{4}.{2}.{2}.\x44.\x44.\xe8\x11\x01'
+                    rb'.\x44\x04.'
+                    rb'(....)' # BRANCH_TO_ANDROIDLOGPRINT
+
+                    rb'(.{2}.{2}.{2}.\xd1(.\x46))'  # ORIGINAL_CODE_2 & MOV_R0_RSTRUCT
+                ),
+                replacement=(
+                    b'\\' + str(Groups.ORIGINAL_CODE_1 + 1).encode() +
+                    asm('nop', False) * 13 +
+                    b'\\' + str(Groups.ORIGINAL_CODE_2 + 1).encode()
+                )
+            ),
 
             ###################################################################
             ######################### 64-BIT PATTERNS #########################
@@ -449,14 +467,14 @@ def build_sensor_info_struct_mod(
                 )
             ),
             LibModificationPattern(
-                name='Exynos 1280 (Android 13) (64-bit)',
+                name='Exynos 1280/2100 (Android 13-15) (64-bit)',
                 is_64bit=True,
                 pattern=(
                     rb'()' # ORIGINAL_CODE_1
-                    rb'...............\x91...\x91...\x91'
-                    rb'...\x52...\x91'
-                    rb'.....\x03.\x2a(....)' # BRANCH_TO_ANDROIDLOGPRINT
-                    rb'(.{0,4}...\xf9.......\xeb...\x54(.\x03.\xaa)...\xa9...\xa9...\xa9)' # ORIGINAL_CODE_2 & MOV_R0_RSTRUCT
+                    rb'.{4}.{4}.{4}...\x91...\x91...\x91'
+                    rb'(?:...\x52...\x91|...\x91...\x52)'
+                    rb'.{4}.\x03.\x2a(....)' # BRANCH_TO_ANDROIDLOGPRINT
+                    rb'((?:.{0}|.{4})...\xf9.{4}...\xeb...\x54(.\x03.\xaa)...\xa9...\xa9...\xa9)' # ORIGINAL_CODE_2 & MOV_R0_RSTRUCT
                 ),
                 replacement=(
                     b'\\' + str(Groups.ORIGINAL_CODE_1 + 1).encode() +
