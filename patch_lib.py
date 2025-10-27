@@ -1,118 +1,441 @@
 #!/usr/bin/python3
 import argparse
 import enum
+import math
 import os
 import re
 import shutil
 import sys
 import zipfile
+from itertools import combinations
+from typing import Generator
 
+import lief
 from capstone import *
 from keystone import *
 
 
-class LibModificationPattern:
-    def __init__(self, name: str, is_64bit: bool,
-                 pattern: bytes, replacement: bytes) -> None:
-        self.name = name
-        self.is_64bit = is_64bit
-        self.pattern = pattern
-        self.replacement = replacement
+class Function:
+    def __init__(self, lib: lief.ELF.Binary, function: lief.Function):
+        self._lib = lib
+        self._function = function
 
-# To generate the patterns, I selected some instructions in Ghidra,
-# then opened the Instruction Pattern Search tool (Search->For Instruction Patterns)
-# and masked all columns except the first. After that, I copied
-# the full search string and converted it with "ghidra_pattern_to_regex.py"
+    @property
+    def name(self) -> str:
+        return self._function.name
 
-class LibModification:
-    def __init__(self, name: str, description: str,
-                 patterns: list[LibModificationPattern]) -> None:
-        self.name = name
-        self.description = description
-        self.patterns = patterns
+    @property
+    def address(self) -> int:
+        if self._lib.header.machine_type == lief.ELF.ARCH.ARM:
+            return self._function.address & ~1  # Remove Thumb bit
 
-    def try_match(
-            self, lib_data: bytes
-        ) -> tuple[LibModificationPattern|None, tuple|None]:
-        """Tries to match all the patterns against `lib_data`
-        until one matches exactly one time.
+        return self._function.address
+
+    @property
+    def size(self) -> int:
+        return self._function.size
+    
+    @property
+    def has_thumb_bit(self) -> bool:
+        if self._lib.header.machine_type == lief.ELF.ARCH.ARM:
+            return (self._function.address & 1) != 0
+
+        return False
+    
+    def bytes(self, offset: int = 0, amount: int|None = None) -> bytes:
+        return self._lib.get_content_from_virtual_address(
+            self.address + offset, amount or self.size
+        ).tobytes()
+    
+    def instructions(self, offset: int = 0,
+                     amount: int|None = None) -> Generator[CsInsn, None, None]:
+        return disasm(
+            self.bytes(offset, amount),
+            self._lib.header.machine_type == lief.ELF.ARCH.AARCH64
+        )
+
+    @classmethod
+    def from_name(self, lib: lief.ELF.Binary,
+                  name_pattern: str) -> Generator['Function', None, None]:
+        """Returns all functions that match the name pattern."""
+
+        pattern = re.compile(name_pattern)
+        functions = (Function(lib, f) for f in lib.functions)
+        return (f for f in functions if pattern.match(f.name))
+
+    @classmethod
+    def from_name_single(self, lib: lief.ELF.Binary, name_pattern: str) -> 'Function':
+        """Returns a single function that matches the name pattern.
         
-        Returns a tuple containing the matching pattern and the match,
-        or `(None, None)`.
+        Aborts if none or more than one function is found.
         """
-        for i, pattern in enumerate(self.patterns):
-            matches = re.findall(pattern.pattern, lib_data, re.DOTALL)
-            if len(matches) != 1:
-                if i < len(self.patterns) - 1:
+        found = list(Function.from_name(lib, name_pattern))
+        if len(found) == 0:
+            abort(f'No function matches found for "{name_pattern}"')
+        if len(found) > 1:
+            abort(f'Found multiple functions that match "{name_pattern}"')
+
+        return found[0]
+    
+    @classmethod
+    def from_address(self, lib: lief.ELF.Binary, address: int) -> 'Function|None':
+        """Returns the function with the given address,
+        or `None` if no function is found.
+        
+        Aborts if multiple functions are found.
+        """
+        functions = (Function(lib, f) for f in lib.functions)
+        found = [f for f in functions if f.address == address]
+
+        if len(found) == 0:
+            return None
+        elif len(found) > 1:
+            # Some ARM binaries contain the same function twice in the
+            # symbol table, once without the Thumb bit and once with it.
+            if len(found) == 2 and not found[0].has_thumb_bit and found[1].has_thumb_bit:
+                if found[0].size == 0 and found[1].size > 0:
+                    return found[1]
+
+            abort(f'Found multiple functions with address {hex(address)}')
+
+        return found[0]
+    
+    def get_called_functions(self) -> Generator['Function', None, None]:
+        """Gets all the functions called by this function (with `bl`),
+        excluding thunks without symbols.
+        """
+        thunk_patterns = [
+            ['adrp', 'ldr', 'add', 'br'],
+            ['bx pc']
+        ]
+
+        for ins in self.instructions():
+            if ins.mnemonic != 'bl':
+                continue
+
+            offset = ins.operands[0].value.imm
+            target_addr = self.address + offset
+            target_func = Function.from_address(self._lib, target_addr)
+            if target_func is None:
+                # Check if the function is a thunk
+                is_thunk = False
+                instructions = list(self.instructions(offset, amount=16))
+                for pattern in thunk_patterns:
+                    for i, expected in enumerate(pattern):
+                        ins = instructions[i]
+                        if (ins.mnemonic != expected and f'{ins.mnemonic} {ins.op_str}' != expected):
+                            break
+                    else:
+                        is_thunk = True
+                        break
+
+                # We don't care about thunk functions
+                if is_thunk:
                     continue
 
-                print(f'[!] [{self.name}] Unexpected number of matches ({len(matches)})')
-                return (None, None)
-            
-            print(f'[*] [{self.name}] Found match using "{pattern.name}" pattern')
-            return (pattern, matches[0])
+                abort(f'Couldn\'t find any function with address {hex(target_addr)}')
 
-    def try_patch(self, lib_data: bytes) -> bytes|None:
-        """Tries to apply the modification to `lib_data`.
+            yield target_func
 
-        Returns the modified bytes if successful, otherwise `None`.
+    def get_return_instructions(self) -> Generator[CsInsn, None, None]:
+        """Finds all the return instructions in this function
+        (`ret`, `pop {..., pc}`).
         """
-        pattern, _ = self.try_match(lib_data)
-        if pattern is None:
-            return None
+        aarch64 = self._lib.header.machine_type == lief.ELF.ARCH.AARCH64
+        for ins in self.instructions():
+            if aarch64:
+                if ins.mnemonic == 'ret':
+                    yield ins         
+            if 'pc' in ins.op_str:
+                if ins.mnemonic.startswith('pop'):
+                    yield ins
 
-        return re.sub(pattern.pattern, pattern.replacement, lib_data, 1, re.DOTALL)
-
-########################################################################
 cs_thumb = Cs(CS_ARCH_ARM, CS_MODE_THUMB + CS_MODE_LITTLE_ENDIAN)
+cs_thumb.detail = True
 cs_arm64 = Cs(CS_ARCH_ARM64, CS_MODE_LITTLE_ENDIAN)
+cs_arm64.detail = True
 ks_thumb = Ks(KS_ARCH_ARM, KS_MODE_THUMB + KS_MODE_LITTLE_ENDIAN)
-ks_arm64 = Ks(KS_ARCH_ARM64, KS_MODE_LITTLE_ENDIAN)
+ks_aarch64 = Ks(KS_ARCH_ARM64, KS_MODE_LITTLE_ENDIAN)
 
-def disasm(instruction: bytes, arm64: bool) -> tuple[str, str]:
-    cs = cs_arm64 if arm64 else cs_thumb
-    ins = next(cs.disasm_lite(instruction, 0x0))
+def disasm(instructions: bytes, aarch64: bool) -> Generator[CsInsn, None, None]:
+    cs = cs_arm64 if aarch64 else cs_thumb
+    return cs.disasm(instructions, 0x0)
 
-    return (ins[2], ins[3])
-
-def disasm_multiple(instructions: bytes, arm64: bool) -> list[tuple[str, str]]:
-    cs = cs_arm64 if arm64 else cs_thumb
-    ins = cs.disasm_lite(instructions, 0x0)
-
-    return [(x[2], x[3]) for x in ins]
-
-def asm(instruction: str, arm64: bool) -> bytes:
-    ks = ks_arm64 if arm64 else ks_thumb
-
+def asm(instruction: str, aarch64: bool) -> bytes:
+    ks = ks_aarch64 if aarch64 else ks_thumb
     return bytes(ks.asm(instruction)[0])
 
-def sanitize(instruction: str) -> str:
-    return instruction.replace(' ', '').replace('[', '').replace(']', '')
+########################################################################
+HEX = r'(?:0x[0-9a-fA-F]+?)'
+IMMEDIATE = fr'(?:-?\d+?|{HEX})'
 
-def disasm_ldr(instruction: bytes, arm64: bool) -> tuple[str, str, str|int]:
-    op = disasm(instruction, arm64)
-    assert op[0].startswith('ldr')
+def sanitize(pattern: str|None) -> str|None:
+    if pattern is None:
+        return None
 
-    data = sanitize(op[1]).split(',')
-    if data[2].startswith('#'):
-        data[2] = int(data[2][1:], 16)
+    return f'(?:{pattern})'
 
-    return (data[0], data[1], data[2])
+def register(aarch64: bool, register: int|None = None) -> str:
+    if aarch64:
+        if register is not None:
+            return fr'[rxw]{register}|sp'
 
-def disasm_mov(instruction: bytes, arm64: bool) -> tuple[str, str|int]:
-    op = disasm(instruction, arm64)
-    assert op[0].startswith('mov')
+        return r'(?:[rxw][0-9]|[rxw][1-2][0-9]|[rxw]30|sp)'
 
-    data = sanitize(op[1]).split(',')
-    if data[1].startswith('#'):
-        data[1] = int(data[1][1:], 16)
+    if register is not None:
+        return fr'r{register}'
 
-    return (data[0], data[1])
+    return r'(?:r1[0-5]|r[0-9])'
+
+def register_range(aarch64: bool, min: int, max: int) -> str:
+    possibilities = '|'.join(str(i) for i in range(min, max + 1))
+    if aarch64:
+        return fr'(?:[rxw](?:{possibilities}))'
+
+    return fr'(?:r(?:{possibilities}))'
+
+def any_instruction_pattern(min: int, max: int) -> list[tuple[str, str]|None]:
+    res = []
+    for _ in range(min):
+        res.append((r'^.+$', r'^.+?$'))
+    for _ in range(max - min):
+        res.append(None)
+
+    return res
+
+def add_pattern(
+        aarch64: bool,
+        dst_reg: str|None = None,
+        src_reg: str|None = None,
+        value: str|None = None
+) -> tuple[str, str]:
+    dst_reg = sanitize(dst_reg) or register(aarch64)
+    src_reg = sanitize(src_reg) or register(aarch64)
+    value = sanitize(value)
+
+    return r'^add$', fr'^{dst_reg}, {src_reg}, (?:#{value or IMMEDIATE}|{value or register(aarch64)})$'
+
+def adr_pattern(
+        aarch64: bool,
+        dst_reg: str|None = None,
+        label: str|None = None
+) -> tuple[str, str]:
+    dst_reg = sanitize(dst_reg) or register(aarch64)
+    label = sanitize(label) or IMMEDIATE
+
+    return r'^adrp?$', fr'^{dst_reg}, #{label}$'
+
+def branch_pattern(
+        aarch64: bool,
+        label_or_reg: str|None = None
+) -> tuple[str, str]:
+    label_or_reg = sanitize(label_or_reg)
+    label_or_reg = fr'^(?:#{label_or_reg or IMMEDIATE}|{label_or_reg or register(aarch64)})$'
+
+    if not aarch64:
+        return r'^(b|bx|bl|blx)$', label_or_reg
+    else:
+        return r'^(b|bl|br|blr)$', label_or_reg
+
+def ldr_pattern(
+        aarch64: bool,
+        dst_reg: str|None = None, src_reg: str|None = None,
+        offset: str|None = None
+) -> tuple[str, str]:
+    dst_reg = sanitize(dst_reg) or register(aarch64)
+    src_reg = sanitize(src_reg) or register(aarch64)
+    offset = sanitize(offset) or IMMEDIATE
+
+    if not aarch64:
+        return r'^ldr(?:b|sb|h|sh)?(?:\.w)?$', fr'^{dst_reg}, \[{src_reg}, #{offset}\]$'
+    else:
+        return r'^ldr(?:b|sb|h|sh|sw)?$', fr'^{dst_reg}, \[{src_reg}, #{offset}\]$'
+
+def mov_pattern(
+        aarch64: bool,
+        dst_reg: str|None = None,
+        value_or_src_reg: str|None = None
+) -> tuple[str, str]:
+    dst_reg = sanitize(dst_reg) or register(aarch64)
+    value_or_src_reg = sanitize(value_or_src_reg)
+
+    return r'^mov(?:\.w)?$', fr'^{dst_reg}, (?:#{value_or_src_reg or IMMEDIATE}|{value_or_src_reg or register(aarch64)})$'
+
+def pop_pattern(
+        popped_registers: list[str]|None = None,
+        match_on_extra_regs: bool = False) -> tuple[str, str]:
+    ins = r'^pop(?:\.w)?$'
+    if popped_registers is None:
+        return ins, fr'^.+?$'
+    
+    regs = ', '.join([sanitize(reg) for reg in popped_registers])
+    if match_on_extra_regs:
+        return ins, fr'^\{{.+?{regs}.+?\}}$'
+    
+    return ins, fr'^\{{{regs}\}}$'
+
+def ret_pattern(dst_reg: str = 'LR') -> tuple[str, str]:
+    if dst_reg == 'LR':
+        return r'^ret$', r'^$'
+
+    dst_reg = sanitize(dst_reg)
+    return r'^ret$', fr'^{dst_reg}$'
+
+def str_pattern(
+        aarch64: bool,
+        src_reg: str|None = None,
+        dst_reg: str|None = None,
+        offset: str|None = None
+) -> tuple[str, str]:
+    src_reg = sanitize(src_reg) or register(aarch64)
+    dst_reg = sanitize(dst_reg) or register(aarch64)
+    offset = sanitize(offset)
+
+    if offset is not None:
+        return r'^str(?:b|h)?(?:\.w)?$', fr'^{src_reg}, \[{dst_reg}, #{offset}\]$'
+    else:
+        offset = IMMEDIATE
+        return r'^str(?:b|h)?(?:\.w)?$', fr'^{src_reg}, \[{dst_reg}(?:, #{offset})?\]$'
+
+def strd_pattern(
+        aarch64: bool,
+        src_reg1: str|None = None, src_reg2: str|None = None,
+        dst_reg: str|None = None,
+        offset: str|None = None
+) -> tuple[str, str]:
+    src_reg1 = sanitize(src_reg1) or register(aarch64)
+    src_reg2 = sanitize(src_reg2) or register(aarch64)
+    dst_reg = sanitize(dst_reg) or register(aarch64)
+    offset = sanitize(offset) or IMMEDIATE
+
+    if not aarch64:
+        return r'^strd(?:\.w)?$', fr'^{src_reg1}, {src_reg2}, \[{dst_reg}, #{offset}\]$'
+    else:
+        raise NotImplementedError()
+
+class InstructionsBlockPattern:
+    """Contains the patterns necessary to match 
+    a consecutive block of instructions.
+    """
+    def __init__(self, name: str, patterns: list[tuple[str, str]|None]):
+        self.patterns = patterns
+        self.name = name
+
+def _match_instruction_block(
+        instructions: list[CsInsn],
+        block_pattern: InstructionsBlockPattern
+) -> list[str]|None:
+    patterns = block_pattern.patterns
+    if len(patterns) == 0 or patterns.count(None) == len(patterns):
+        return None
+    
+    for i, pattern in enumerate(patterns):
+        if pattern is not None:
+            break
+
+        # Remove leading None patterns
+        patterns = patterns[i + 1:]
+
+    first_mnemonic_pattern = patterns[0][0]
+    first_op_pattern = patterns[0][1]
+    for i, ins in enumerate(instructions):
+        if i + len(patterns) > len(instructions):
+            # Not enough instructions left to match block
+            return None
+
+        matches = []
+        mnemonic_match = re.match(first_mnemonic_pattern, ins.mnemonic)
+        op_match = re.match(first_op_pattern, ins.op_str)
+        if mnemonic_match is None or op_match is None:
+            continue
+
+        matches.extend(mnemonic_match.groups())
+        matches.extend(op_match.groups())
+        found_matches = 1
+        if found_matches == len(patterns):
+            if _match_instruction_block(instructions[i + 1:], block_pattern) is not None:
+                abort(f'Multiple matching instruction blocks found using pattern "{block_pattern.name}"')
+
+            return matches
+
+        # Found the first match, now check if the following consecutive instructions match
+        for j in range(1, len(patterns)):
+            if i + j >= len(instructions):
+                # Not enough instructions left to match block
+                break
+
+            if patterns[j] is None:
+                found_matches += 1
+                continue
+
+            ins_pattern, op_pattern = patterns[j]
+            for match_i in range(len(matches) - 1, -1, -1):
+                ins_pattern = ins_pattern.replace(f'${match_i}', matches[match_i])
+                op_pattern = op_pattern.replace(f'${match_i}', matches[match_i])
+
+            ins = instructions[i + j]
+            mnemonic_match = re.match(ins_pattern, ins.mnemonic)
+            op_match = re.match(op_pattern, ins.op_str)
+            if mnemonic_match is None or op_match is None:
+                break
+
+            matches.extend(mnemonic_match.groups())
+            matches.extend(op_match.groups())
+            found_matches += 1
+            if found_matches == len(patterns):
+                if _match_instruction_block(instructions[i + 1:], block_pattern) is not None:
+                    abort(f'Multiple matching instruction blocks found using pattern "{block_pattern.name}"')
+
+                return matches
+
+def match_instruction_block(
+        instructions: list[CsInsn],
+        block_pattern: InstructionsBlockPattern
+) -> list[str]|None:
+    patterns = block_pattern.patterns
+
+    # 'None' represents optional instructions that may or may not be present
+    # First lets try to match without the None(s), then with the different
+    # permutations of the pattern using a single 'None', and so on.
+    # Example with patterns = [A, None, B, None, C]:
+    # 1) [A, B, C]
+    # 2) [A, None, B, C], [A, B, None, C]
+    # 3) [A, None, B, None, C]
+    none_indices = [i for i, x in enumerate(patterns) if x is None]
+    tried = set()
+
+    for i in range(len(patterns) + 1):
+        for none_pos in combinations(none_indices, i):
+            pattern = patterns.copy()
+            for i in sorted(set(none_indices) - set(none_pos), reverse=True):
+                pattern.pop(i)
+
+            t = tuple(pattern)
+            if t not in tried:
+                tried.add(t)
+                matches = _match_instruction_block(
+                    instructions, 
+                    InstructionsBlockPattern(block_pattern.name, pattern)
+                )
+                if matches is not None:
+                    return matches
+
+def match_single_instruction_block(
+        instructions: list[CsInsn],
+        blocks: list[InstructionsBlockPattern]
+) -> list[str]:
+    """Returns the first matching instruction block found."""
+
+    for block in blocks:
+        matches = match_instruction_block(instructions, block)
+        if matches is not None:
+            print(f'[+] Found match using "{block.name}" pattern')
+            return matches
+
+    abort('No matching instruction block found')
 
 ########################################################################
 class Capability(enum.IntEnum):
-    # Information grabbed from android::ExynosCameraMetadataConverter::m_createAvailableCapabilities
-
     # These three are automatically enabled if the hardware level is 1 (FULL)
     MANUAL_SENSOR_AND_READ_SENSOR_SETTINGS = 2
     MANUAL_POST_PROCESSING = 4
@@ -143,516 +466,218 @@ class HardwareLevel(enum.IntEnum):
     # For external cameras
     EXTERNAL = 4
 
-def find_capabilities_and_hw_level_offsets(lib_data: bytes) -> tuple[int, int]:
-    mod = LibModification(
-        name='Find available capabilities & hardware level offsets',
-        description=(
-            'Finds the offsets of the available capabilities bitmask and '
-            'the Hardware Level value inside the ExynosCameraSensorInfo struct'
-        ),
-        patterns=[
-            LibModificationPattern(
-                name='Galaxy A20 (Android 9) (32-bit)',
-                is_64bit=False,
-                pattern=(
-                    # Fragment of android::ExynosCameraMetadataConverter::m_createAvailableCapabilities
-                    rb'('
-                    rb'.\xb0.\x46.{2}.\x46.\x46.{2}.\x44.{2}.{2}.{2}.\xd0.{2}.\xf8..'
-                    # LDRB RX, [RX, #HW_LEVEL_OFFSET]
-                    rb'(.\xf8..)'
-                    # LDR RX, [RX, #AVAILABLE_CAPABILITIES_OFFSET]
-                    rb'(.\xf8..)'
-                    rb'.{2}.{2}\x4f\xf0..'
-                    rb')'
-                ),
-                replacement=b'\\1'
-            ),
-            LibModificationPattern(
-                name='Generic (32-bit)',
-                is_64bit=False,
-                pattern=(
-                    # Fragment of android::ExynosCameraMetadataConverter::m_createAvailableCapabilities
-                    rb'('
-                    rb'.\xb0.\x46(?:.{4}|.{6}).\x44(?:.{6}|.{10}).\xf0...{2}.\xf0..(?:.{0}|.{2})'
-                    # LDRB RX, [RX, #HW_LEVEL_OFFSET]
-                    rb'(.\xf8..)'
-                    rb'(?:.{0}|.{4}|.{6})'
-                    # LDR RX, [RX, #AVAILABLE_CAPABILITIES_OFFSET]
-                    rb'(.\xf8..)'
-                    rb'(?:.{0}|.{4}).\xf8..'
-                    rb')'
-                ),
-                replacement=b'\\1'
-            ),
-            LibModificationPattern(
-                name='Generic (64-bit)',
-                is_64bit=True,
-                pattern=(
-                    # Fragment of android::ExynosCameraMetadataConverter::m_createAvailableCapabilities
-                    rb'('
-                    rb'.\xd0\x3b\xd5...\xf9(?:.{4}|.{8}).\x03.\xaa(?:.{0}|.{8})...\xb4'
-                    # LDRB WX, [RX, #HW_LEVEL_OFFSET]
-                    rb'(...\x39)'
-                    rb'(?:.{0}|.{4}|.{20})'
-                    # LDR XX, [XX, #AVAILABLE_CAPABILITIES_OFFSET]
-                    rb'(...\xf9)'
-                    rb'(?:(?:.{0}|.{16}|.{20})(?:...\x91){4}|(?:.{4}...\x91){4})'
-                    rb')'
-                ),
-                replacement=b'\\1'
-            ),
-        ]
-    )
+def find_capabilities_and_hw_level_offsets(lib: lief.ELF.Binary) -> tuple[int, int]:
+    aarch64 = lib.header.machine_type == lief.ELF.ARCH.AARCH64
+    func = Function.from_name_single(lib, '^_ZN7android29ExynosCameraMetadataConverter29m_createAvailableCapabilities.+')
+    # We only care about the android_log_print that is at the start of the function,
+    # since it logs "supportedHwLevel(%d) supportedCapabilities(0x%4ju)"
+    instructions = list(func.instructions(amount=120 if aarch64 else 70))
 
-    pattern, match = mod.try_match(lib_data)
-    if pattern is None or match is None:
-        abort('Pattern not found')
-
-    hw_offset = disasm_ldr(match[1], pattern.is_64bit)[2]
-    cap_offset = disasm_ldr(match[2], pattern.is_64bit)[2]
-    print(f'Available capabilities offset: {hex(cap_offset)}')
-    print(f'Hardware level offset: {hex(hw_offset)}')
+    expected_blocks = [
+        InstructionsBlockPattern('Generic (32-bit)', [
+            # $0 = HW level/capabilities value register
+            # $1 = ExynosCameraSensorInfo struct register
+            # $2 = HW level/capabilities offset
+            ldr_pattern(aarch64, '(r5|r6|r7)', fr'({register(aarch64)})', fr'({IMMEDIATE})'),
+            *any_instruction_pattern(0, 2),
+            # $3 = capabilities/HW level value register
+            # $4 = capabilities/HW level offset
+            ldr_pattern(aarch64, '(r5|r6|r7)', '$1', fr'({IMMEDIATE})'),
+            *any_instruction_pattern(0, 2),
+            ldr_pattern(aarch64, src_reg='pc'),
+            ldr_pattern(aarch64, src_reg='pc'),
+        ]),
+        InstructionsBlockPattern('Generic (64-bit)', [
+            # $0 = HW level/capabilities value register
+            # $1 = ExynosCameraSensorInfo struct register
+            # $2 = HW level/capabilities offset
+            ldr_pattern(aarch64, fr'({register_range(aarch64, 19, 29)})', fr'({register(aarch64)})', fr'({IMMEDIATE})'),
+            *any_instruction_pattern(0, 5),
+            # $3 = capabilities/HW level value register
+            # $4 = capabilities/HW level offset
+            ldr_pattern(aarch64, fr'({register_range(aarch64, 19, 29)})', '$1', fr'({IMMEDIATE})'),
+            *any_instruction_pattern(6, 13),
+            mov_pattern(aarch64, value_or_src_reg='$0'),
+            str_pattern(aarch64, src_reg='$3'),
+            branch_pattern(aarch64),
+        ]),
+    ]
+    print('[*] Finding hardware level & available capabilities offsets...')
+    matches = match_single_instruction_block(instructions, expected_blocks)
+    hw_offset =  int(matches[2], 16)
+    cap_offset = int(matches[4], 16)
+    print(hex(hw_offset), hex(cap_offset))
 
     # Both offsets are usually close to each other
     if abs(cap_offset - hw_offset) > 8:
-        print('\033[33m[w] Big difference between offsets, one of them may be wrong\033[0m')
+        print('\033[33m[w] Big difference between offsets, one or both may be wrong\033[0m')
+    if hw_offset == cap_offset:
+        abort('Both offsets have the same value')
 
-    assert isinstance(cap_offset, int) and isinstance(hw_offset, int)
-    assert hw_offset != cap_offset
     return cap_offset, hw_offset
 
-def build_sensor_info_struct_mod(
-        lib_data: bytes,
+def createExynosCameraSensorInfo_mod(
+        lib: lief.ELF.Binary,
         enable_capabilities: list[int]|None = None,
         disable_capabilities: list[int]|None = None,
         hw_level: int|None = None,
         skip_depth_cameras: bool = False
-    ) -> LibModification:
+    ) -> Generator[tuple[int, bytes], None, None]:
+    # Camera configs are created on 'createExynosCameraSensorInfo'.
+    # The function calls different camera config struct constructors
+    # (e.g. 'ExynosCameraSensorIMX754') depending on the camera,
+    # and returns the config struct.
 
-    # The idea is simple; search for the last part of the function that creates the
-    # ExynosCameraSensorInfo struct of all cameras (createExynosCameraSensorInfo)
-    # & replace a call to _android_log_print with NOPs. Then, we replace
-    # the NOPs with our own instructions to modify values inside the struct.
+    # Many config constructors are included in the lib, but only
+    # those called by 'createExynosCameraSensorInfo' are used.
+    # This means we can safely replace one of the unused ones with our own
+    # instructions and branch to it at the end of 'createExynosCameraSensorInfo'.
 
-    class Groups(enum.IntEnum):
-        ORIGINAL_CODE_1 = 0
-        BRANCH_TO_ANDROIDLOGPRINT = 1
-        ORIGINAL_CODE_2 = 2
-        MOV_R0_RSTRUCT = 3
-    
-    mod = LibModification(
-        name='Modify ExynosCameraSensorInfo struct',
-        description=(
-            'Modifies values inside the ExynosCameraSensorInfo struct '
-            'to enable capabilities, change the hardware level, etc.'
-        ),
-        patterns=[
-            # New patterns should be added at the bottom, so they have less priority
-
-            ###################################################################
-            ######################### 32-BIT PATTERNS #########################
-            ###################################################################
-            LibModificationPattern(
-                name='Tab S6 Lite (Android 10-13) (32-bit)',
-                is_64bit=False,
-                pattern=(
-                    rb'(.\x44......)' # ORIGINAL_CODE_1 - won't be modified
-
-                    # _android_log_print(4, "ExynosCameraSensorInfo", "INFO(%s[%d]):sensor ID %d name ...
-                    rb'..(?:.\xe8\x11\x01|.\xe8\x91\x00)'
-                    rb'\x04........\x44.\x44.\x44'
-                    rb'(....)' # BRANCH_TO_ANDROIDLOGPRINT
-
-                    # ORIGINAL_CODE_2 - won't be modified
-                    rb'((?:.{6}|.{5}\x44.{5}\x42)\x02\xbf'
-                        # MOV r0, RSTRUCT. RSTRUCT contains the address of the ExynosCameraSensorInfo struct
-                        rb'(.\x46)' # MOV_R0_RSTRUCT
-                    rb')'
-                ),
-                replacement=(
-                    b'\\' + str(Groups.ORIGINAL_CODE_1 + 1).encode() +
-                    asm('nop', False) * 12 +
-                    b'\\' + str(Groups.ORIGINAL_CODE_2 + 1).encode()
-                )
-            ),
-            LibModificationPattern(
-                name='Exynos 990/1280/7884/7904/9820/9825 (Android 10-14) (32-bit)',
-                is_64bit=False,
-                pattern=(
-                    rb'()' # ORIGINAL_CODE_1
-
-                    rb'....(?:.\xe8\x11\x01|.\xe8\x91\x00)'
-                    rb'\x04........\x44.\x44.\x44'
-                    rb'(....)' # BRANCH_TO_ANDROIDLOGPRINT
-
-                    rb'(......(?:.\xd1|\x02\xbf|.{6}\x02\xbf)(.\x46))'  # ORIGINAL_CODE_2 & MOV_R0_RSTRUCT
-                ),
-                replacement=(
-                    b'\\' + str(Groups.ORIGINAL_CODE_1 + 1).encode() +
-                    asm('nop', False) * 13 +
-                    b'\\' + str(Groups.ORIGINAL_CODE_2 + 1).encode()
-                )
-            ),
-            LibModificationPattern(
-                name='Exynos 9610/9611 (Android 11) (32-bit)',
-                is_64bit=False,
-                pattern=(
-                    rb'()' # ORIGINAL_CODE_1
-                    
-                    rb'.......\x46.\x44.\xe9..'
-                    rb'\x04..\xe9.......\x44.\x44(....)' # BRANCH_TO_ANDROIDLOGPRINT
-
-                    rb'(......\x02\xbf(.\x46))' # ORIGINAL_CODE_2 & MOV_R0_RSTRUCT
-                ),
-                replacement=(
-                    b'\\' + str(Groups.ORIGINAL_CODE_1 + 1).encode() +
-                    asm('nop', False) * 16 +
-                    b'\\' + str(Groups.ORIGINAL_CODE_2 + 1).encode()
-                )
-            ),
-            LibModificationPattern(
-                name='Exynos 850/1280/9611 (Android 12-14) (32-bit)',
-                is_64bit=False,
-                pattern=(
-                    rb'()' # ORIGINAL_CODE_1
-
-                    rb'.......\xe9...\x46.\x44.\xe9..'
-                    rb'\x04......\x44.\x44(....)' # BRANCH_TO_ANDROIDLOGPRINT
-
-                    rb'(.....(?:\x44.....)?\x42..(.\x46))' # ORIGINAL_CODE_2 & MOV_R0_RSTRUCT
-                ),
-                replacement=(
-                    b'\\' + str(Groups.ORIGINAL_CODE_1 + 1).encode() +
-                    asm('nop', False) * 16 +
-                    b'\\' + str(Groups.ORIGINAL_CODE_2 + 1).encode()
-                )
-            ),
-            LibModificationPattern(
-                name='Exynos 1280/7884/7904/9825 (Android 9) (32-bit)',
-                is_64bit=False,
-                pattern=(
-                    rb'()' # ORIGINAL_CODE_1
-
-                    rb'.\x49.\x4a.\x4b.....\xe8\x91\x00'
-                    rb'\x04..\x44.\x44.\x44(....)' # BRANCH_TO_ANDROIDLOGPRINT
-
-                    rb'(...\x44.........\xd1(.\x46))' # ORIGINAL_CODE_2 & MOV_R0_RSTRUCT
-                ),
-                replacement=(
-                    b'\\' + str(Groups.ORIGINAL_CODE_1 + 1).encode() +
-                    asm('nop', False) * 13 +
-                    b'\\' + str(Groups.ORIGINAL_CODE_2 + 1).encode()
-                )
-            ),
-            LibModificationPattern(
-                name='Exynos 9610/9611 (Android 9) (32-bit)',
-                is_64bit=False,
-                pattern=(
-                    rb'()' # ORIGINAL_CODE_1
-
-                    rb'\x4f\xf4...\xe9...\x46'
-                    rb'.........\x44...\x44.\x44'
-                    rb'\x04.(....)' # BRANCH_TO_ANDROIDLOGPRINT
-
-                    rb'(.....\x44......\x02\xbf(.\x46))' # ORIGINAL_CODE_2 & MOV_R0_RSTRUCT
-                ),
-                replacement=(
-                    b'\\' + str(Groups.ORIGINAL_CODE_1 + 1).encode() +
-                    asm('nop', False) * 16 +
-                    b'\\' + str(Groups.ORIGINAL_CODE_2 + 1).encode()
-                )
-            ),
-            LibModificationPattern(
-                name='Galaxy S21 FE (Exynos 2100) (Android 15) (32-bit)',
-                is_64bit=False,
-                pattern=(
-                    rb'()' # ORIGINAL_CODE_1
-
-                    rb'.{2}.{4}.{2}.{2}.\x44.\x44.\xe8\x11\x01'
-                    rb'.\x44\x04.'
-                    rb'(....)' # BRANCH_TO_ANDROIDLOGPRINT
-
-                    rb'(.{2}.{2}.{2}.\xd1(.\x46))'  # ORIGINAL_CODE_2 & MOV_R0_RSTRUCT
-                ),
-                replacement=(
-                    b'\\' + str(Groups.ORIGINAL_CODE_1 + 1).encode() +
-                    asm('nop', False) * 13 +
-                    b'\\' + str(Groups.ORIGINAL_CODE_2 + 1).encode()
-                )
-            ),
-
-            ###################################################################
-            ######################### 64-BIT PATTERNS #########################
-            ###################################################################
-            LibModificationPattern(
-                name='Exynos 850/9610/9611 (Android 10-14) (64-bit)',
-                is_64bit=True,
-                pattern=(
-                    rb'(\x52|\x91....)' # ORIGINAL_CODE_1
-                    rb'...............\x91...\x91...\x91...\x91'
-                    rb'....(?:...\x52|...\x32)'
-                    rb'.\x03.\x2a.\x03.\x2a(....)' # BRANCH_TO_ANDROIDLOGPRINT
-                    rb'(.{0,4}...\xf9.......\xeb...\x54(.\x03.\xaa)...\xa9...\xa9.{0,4}...\xa9)' # ORIGINAL_CODE_2 & MOV_R0_RSTRUCT
-                ),
-                replacement=(
-                    b'\\' + str(Groups.ORIGINAL_CODE_1 + 1).encode() +
-                    asm('nop', True) * 12 +
-                    b'\\' + str(Groups.ORIGINAL_CODE_2 + 1).encode()
-                )
-            ),
-            LibModificationPattern(
-                name='Exynos 9610/9611 (Android 9) (64-bit)',
-                is_64bit=True,
-                pattern=(
-                    rb'(\x52|\x91....)' # ORIGINAL_CODE_1
-                    rb'...............\x91...\x91...\x91'
-                    rb'....(?:...\x52|...\x32)'
-                    rb'...\x91.\x03.\x2a.\x03.\x2a(....)' # BRANCH_TO_ANDROIDLOGPRINT
-                    rb'(.{0,4}...\xf9.......\xeb...\x54(.\x03.\xaa)...\xa9...\xa9...\xa9)' # ORIGINAL_CODE_2 & MOV_R0_RSTRUCT
-                ),
-                replacement=(
-                    b'\\' + str(Groups.ORIGINAL_CODE_1 + 1).encode() +
-                    asm('nop', True) * 12 +
-                    b'\\' + str(Groups.ORIGINAL_CODE_2 + 1).encode()
-                )
-            ),
-            LibModificationPattern(
-                name='Exynos 850 (Android 13) (64-bit)',
-                is_64bit=True,
-                pattern=(
-                    rb'(\x52|\x91....)' # ORIGINAL_CODE_1
-                    rb'...............\x91...\x91...\x91...\x91'
-                    rb'.....\x03.\x2a'
-                    rb'(?:...\x52|...\x32)'
-                    rb'.\x03.\x2a(....)' # BRANCH_TO_ANDROIDLOGPRINT
-                    rb'(.{0,4}...\xf9.......\xeb...\x54(.\x03.\xaa).{0,4}...\xa9...\xa9...\xa9)' # ORIGINAL_CODE_2 & MOV_R0_RSTRUCT
-                ),
-                replacement=(
-                    b'\\' + str(Groups.ORIGINAL_CODE_1 + 1).encode() +
-                    asm('nop', True) * 12 +
-                    b'\\' + str(Groups.ORIGINAL_CODE_2 + 1).encode()
-                )
-            ),
-            LibModificationPattern(
-                name='Exynos 1280 (Android 14) (64-bit)',
-                is_64bit=True,
-                pattern=(
-                    rb'()' # ORIGINAL_CODE_1
-                    rb'...............\x91...\x91...\x91'
-                    rb'...\x52...\x91'
-                    rb'.....\x03.\x2a.\x03.\x2a(....)' # BRANCH_TO_ANDROIDLOGPRINT
-                    rb'(.{0,4}...\xf9.......\xeb...\x54(.\x03.\xaa)...\xa9...\xa9...\xa9)' # ORIGINAL_CODE_2 & MOV_R0_RSTRUCT
-                ),
-                replacement=(
-                    b'\\' + str(Groups.ORIGINAL_CODE_1 + 1).encode() +
-                    asm('nop', True) * 12 +
-                    b'\\' + str(Groups.ORIGINAL_CODE_2 + 1).encode()
-                )
-            ),
-            LibModificationPattern(
-                name='Exynos 1280/2100 (Android 13-15) (64-bit)',
-                is_64bit=True,
-                pattern=(
-                    rb'()' # ORIGINAL_CODE_1
-                    rb'.{4}.{4}.{4}...\x91...\x91...\x91'
-                    rb'(?:...\x52...\x91|...\x91...\x52)'
-                    rb'.{4}.\x03.\x2a(....)' # BRANCH_TO_ANDROIDLOGPRINT
-                    rb'((?:.{0}|.{4})...\xf9.{4}...\xeb...\x54(.\x03.\xaa)...\xa9...\xa9...\xa9)' # ORIGINAL_CODE_2 & MOV_R0_RSTRUCT
-                ),
-                replacement=(
-                    b'\\' + str(Groups.ORIGINAL_CODE_1 + 1).encode() +
-                    asm('nop', True) * 11 +
-                    b'\\' + str(Groups.ORIGINAL_CODE_2 + 1).encode()
-                )
-            ),
-            LibModificationPattern(
-                name='Exynos 990/7884/7904/9611/9825 (Android 10-14) (64-bit)',
-                is_64bit=True,
-                pattern=(
-                    rb'(\x52|\x91....)' # ORIGINAL_CODE_1
-                    rb'...............\x91...\x91...\x91...\x91'
-                    rb'....(?:...\x52|...\x32)'
-                    rb'.\x03.\x2a(....)' # BRANCH_TO_ANDROIDLOGPRINT
-                    rb'(.{0,4}...\xf9.......\xeb...\x54(.\x03.\xaa)...\xa9...\xa9(?:...\xf9)?...\xa9)' # ORIGINAL_CODE_2 & MOV_R0_RSTRUCT
-                ),
-                replacement=(
-                    b'\\' + str(Groups.ORIGINAL_CODE_1 + 1).encode() +
-                    asm('nop', True) * 11 +
-                    b'\\' + str(Groups.ORIGINAL_CODE_2 + 1).encode()
-                )
-            ),
-            LibModificationPattern(
-                name='Exynos 7884/7904/9825 (Android 9) (64-bit)',
-                is_64bit=True,
-                pattern=(
-                    rb'(\x52|\x91....)' # ORIGINAL_CODE_1
-                    rb'...............\x91...\x91...\x91'
-                    rb'....(?:...\x52|...\x32)'
-                    rb'...\x91.\x03.\x2a(....)' # BRANCH_TO_ANDROIDLOGPRINT
-                    rb'(.{0,4}...\xf9.......\xeb...\x54(.\x03.\xaa)...\xa9...\xa9...\xa9)' # ORIGINAL_CODE_2 & MOV_R0_RSTRUCT
-                ),
-                replacement=(
-                    b'\\' + str(Groups.ORIGINAL_CODE_1 + 1).encode() +
-                    asm('nop', True) * 11 +
-                    b'\\' + str(Groups.ORIGINAL_CODE_2 + 1).encode()
-                )
-            ),
-            LibModificationPattern(
-                name='Galaxy XCover 5 (Android 14) (64-bit)',
-                is_64bit=True,
-                pattern=(
-                    rb'(\x1f\x20\x03\xd5)' # ORIGINAL_CODE_1
-                    rb'.{8}...\x91.{4}...\x91...\x91'
-                    rb'.{4}.\x03.\x2a'
-                    rb'(?:...\x52|...\x32)'
-                    rb'.\x03.\x2a(....)' # BRANCH_TO_ANDROIDLOGPRINT
-                    rb'((?:.{4})?...\xf9.{4}...\xeb...\x54(.\x03.\xaa)(?:.{4})?...\xa9...\xa9...\xa9)' # ORIGINAL_CODE_2 & MOV_R0_RSTRUCT
-                ),
-                replacement=(
-                    b'\\' + str(Groups.ORIGINAL_CODE_1 + 1).encode() +
-                    asm('nop', True) * 11 +
-                    b'\\' + str(Groups.ORIGINAL_CODE_2 + 1).encode()
-                )
-            ),
-        ]
+    # Find createExynosCameraSensorInfo function
+    aarch64 = lib.header.machine_type == lief.ELF.ARCH.AARCH64
+    createExynosCameraSensorInfo = Function.from_name_single(
+        lib, r'^_ZN7android28createExynosCameraSensorInfo.+'
     )
+    print(f'[+] Found createExynosCameraSensorInfo function')
 
-    pattern, match = mod.try_match(lib_data)
-    if pattern is None or match is None:
-        abort('Pattern not found')
+    # Recursively find all the used constructors, example:
+    # createExynosCameraSensorInfo -> ExynosCameraSensorIMX754
+    #   -> ExynosCameraSensorIMX754Base -> ExynosCameraSensorInfoBase
+    constructor_pattern = r'^_ZN7android\d\dExynosCameraSensor(.+?)(Base)?(C1|C2|C3).+'
+    constructors = {
+        f.name : f for f in Function.from_name(lib, constructor_pattern) 
+    }
+    cam_names = set()
+    called_functions = [createExynosCameraSensorInfo]
+    for f in called_functions:
+        called_functions.extend(f.get_called_functions())
+        if not f.name in constructors:
+            continue
 
-    # Ensure the last instruction we replaced with a NOP is a branch
-    last_ins = disasm(match[Groups.BRANCH_TO_ANDROIDLOGPRINT], pattern.is_64bit)[0]
-    assert last_ins in ['b', 'bl', 'blx'], last_ins
+        cam_name = re.match(constructor_pattern, f.name).group(1)
+        if cam_name not in cam_names:
+            if cam_name != 'Info':
+                print(f'- Constructor for {cam_name} is called')
 
-    # We can safely use both registers since they are originally used
-    # as parameters for _android_log_print
-    free_reg = 'w0' if pattern.is_64bit else 'r0'
-    free_reg2 = 'w1' if pattern.is_64bit else 'r1'
-    struct_reg = disasm_mov(match[Groups.MOV_R0_RSTRUCT], pattern.is_64bit)[1]
-    print(f'ExynosCameraSensorInfo struct register: {struct_reg}')
-    assert isinstance(struct_reg, str)
-    assert struct_reg != free_reg
-    assert struct_reg != free_reg2
+            cam_names.add(cam_name)
 
-    # Utils that will be used by the mods
-    rep = pattern.replacement
-    nop = asm('nop', pattern.is_64bit)
-    mod_len = rep.count(nop) * len(nop)
-    current_position = 0
-    def replace_nops(instructions: list[bytes]):
-        nonlocal rep, nop, current_position
-        required_nops = 0
-        for ins in instructions:
-            required_nops += int(len(ins) / len(nop))
-            current_position += len(ins)
+        constructors.pop(f.name)
 
-        # ensure the required NOPs are consecutive, since some patterns may keep
-        # original instructions between NOPs and that could mess up the instruction order
-        if rep.count(nop * required_nops) <= 0:
-            abort('Pattern has not enough space left, try again with less modifications')
+    if len(cam_names) == 0:
+        abort('No used camera config constructors found')
+    if len(constructors) == 0:
+        abort('No unused camera config constructors found')
+    if not any('ExynosCameraSensorInfoBase' in f.name for f in called_functions):
+        abort('ExynosCameraSensorInfoBase constructor not called, this is unexpected')
+    unused_constructor = constructors.popitem()[1]
+    print('[+] Selected unused constructor:', unused_constructor.name)
 
-        rep = rep.replace(
-            nop * required_nops, b''.join(instructions), 1
-        )
+    # Find createExynosCameraSensorInfo's return instruction
+    return_ins = list(createExynosCameraSensorInfo.get_return_instructions())
+    if len(return_ins) == 0:
+        abort('Failed to find return instruction of "createExynosCameraSensorInfo"')
+    elif len(return_ins) > 1:
+        abort('Multiple return instructions found in "createExynosCameraSensorInfo"')
+    return_ins = return_ins[-1]
 
-    # Find struct offsets
-    available_cap_offset, hw_lvl_offset = find_capabilities_and_hw_level_offsets(lib_data)
+    # Find struct offsets & build the instructions of the mod
+    available_cap_offset, hw_lvl_offset = find_capabilities_and_hw_level_offsets(lib)
+    struct_reg = 'x0' if aarch64 else 'r0'
+    free_reg = 'w2' if aarch64 else 'r2'
+    free_reg2 = 'w3' if aarch64 else 'r3'
+    mod: list[bytes] = []
 
-    # Lets start with modifications that require reading the value of
-    # available capabilities, so we only need a single LDR instruction
     if (
         skip_depth_cameras or
         enable_capabilities is not None or
         disable_capabilities is not None
     ):
-        replace_nops([
-            asm(f'ldr {free_reg}, [{struct_reg}, #{available_cap_offset}]', pattern.is_64bit)
+        # Read available capabilities
+        mod.extend([
+            asm(f'ldr {free_reg}, [{struct_reg}, #{available_cap_offset}]', aarch64)
         ])
 
-        # Add conditional branch to skip depth cameras
-        if skip_depth_cameras:
-            instructions = []
-            branch_offset = mod_len - current_position # in bytes
+    # Skip cameras with depth output capability
+    if skip_depth_cameras:
+        if aarch64:
+            mod.extend([
+                # Skip next instruction (return) if depth output capability is not set
+                asm(f'tbz {free_reg}, #{int(math.log2(Capability.DEPTH_OUTPUT))}, #8', aarch64),
+                return_ins.bytes
+            ])
+        else:
+            mod.extend([
+                asm(f'tst {free_reg}, {Capability.DEPTH_OUTPUT}', aarch64),
+                # Skip next instruction (return) if depth output capability is not set
+                asm(f'beq #{2 + return_ins.size}', aarch64),
+                return_ins.bytes
+            ])
+        print('- Depth cameras won\'t be modified')
 
-            if pattern.is_64bit:
-                instructions.append(
-                    asm(f'tbnz {free_reg}, #7, #{branch_offset}', pattern.is_64bit)
-                )
-            else:
-                instructions.append(
-                    asm(f'TST {free_reg}, {Capability.DEPTH_OUTPUT}', pattern.is_64bit),
-                )
-                branch_offset -= len(instructions[0])
-                instructions.append(
-                    asm(f'bne #{branch_offset}', pattern.is_64bit)
-                )
+    # Modify available capabilities value
+    if enable_capabilities is not None:
+        value = 0
+        for cap in enable_capabilities:
+            value |= cap
 
-            replace_nops(instructions)
-            print('[+] Added conditional to skip depth cameras')
-
-        # Modify available capabilities
-        instructions = []
-
-        if enable_capabilities is not None:
-            value = 0
-            for cap in enable_capabilities:
-                value |= cap
-
-            try:
-                instructions.append(
-                    asm(f'orr {free_reg}, {free_reg}, #{value}', pattern.is_64bit)
-                )
-            except KsError:
-                # ORR doesn't support the immediate value, so store it in a register
-                instructions.extend([
-                    asm(f'mov {free_reg2}, #{value}', pattern.is_64bit),
-                    asm(f'orr {free_reg}, {free_reg}, {free_reg2}', pattern.is_64bit)
-                ])
-
-
-        if disable_capabilities is not None:
-            mask = 0xFFFF
-            for cap in disable_capabilities:
-                mask &= ~cap
-
-            try:
-                instructions.append(
-                    asm(f'and {free_reg}, {free_reg}, #{mask}', pattern.is_64bit)
-                )
-            except KsError:
-                # AND doesn't support the immediate value, so store it in a register
-                instructions.extend([
-                    asm(f'mov {free_reg2}, #{mask}', pattern.is_64bit),
-                    asm(f'and {free_reg}, {free_reg}, {free_reg2}', pattern.is_64bit)
-                ])
-
-        if len(instructions) > 0:
-            instructions.append(
-                asm(f'str {free_reg}, [{struct_reg}, #{available_cap_offset}]', pattern.is_64bit)
+        try:
+            mod.append(
+                asm(f'orr {free_reg}, {free_reg}, #{value}', aarch64)
             )
-            replace_nops(instructions)
-            
-            if enable_capabilities is not None:
-                caps = ', '.join([Capability(x).name for x in enable_capabilities])
-                print(f'[+] Enabled capabilities: {caps}')
-            if disable_capabilities is not None:
-                caps = ', '.join([Capability(x).name for x in disable_capabilities])
-                print(f'[+] Disabled capabilities: {caps}')
+        except KsError:
+            # ORR doesn't support the immediate value, so store it in a register
+            mod.extend([
+                asm(f'mov {free_reg2}, #{value}', aarch64),
+                asm(f'orr {free_reg}, {free_reg}, {free_reg2}', aarch64)
+            ])
+
+        caps = ', '.join([Capability(x).name for x in enable_capabilities])
+        print(f'- Enabling capabilities: {caps}')
+    if disable_capabilities is not None:
+        mask = 0xFFFF
+        for cap in disable_capabilities:
+            mask &= ~cap
+
+        try:
+            mod.append(
+                asm(f'and {free_reg}, {free_reg}, #{mask}', aarch64)
+            )
+        except KsError:
+            # AND doesn't support the immediate value, so store it in a register
+            mod.extend([
+                asm(f'mov {free_reg2}, #{mask}', aarch64),
+                asm(f'and {free_reg}, {free_reg}, {free_reg2}', aarch64)
+            ])
+
+        caps = ', '.join([Capability(x).name for x in disable_capabilities])
+        print(f'- Disabling capabilities: {caps}')
+
+    # Save available capabilities
+    if enable_capabilities is not None or disable_capabilities is not None:
+        mod.append(
+            asm(f'str {free_reg}, [{struct_reg}, #{available_cap_offset}]', aarch64)
+        )
 
     # Set hardware level
     if hw_level is not None:
-        # movs is smaller than mov
-        mov = 'mov' if pattern.is_64bit else 'movs'
-        replace_nops([
-            asm(f'{mov} {free_reg}, #{hw_level}', pattern.is_64bit),
-            asm(f'strb {free_reg}, [{struct_reg}, #{hw_lvl_offset}]', pattern.is_64bit)  
+        mov = 'mov' if aarch64 else 'movs'
+        mod.extend([
+            asm(f'{mov} {free_reg}, #{hw_level}', aarch64),
+            asm(f'strb {free_reg}, [{struct_reg}, #{hw_lvl_offset}]', aarch64)  
         ])
-        print(f'[+] Hardware level set to {hw_level} ({HardwareLevel(hw_level).name})')
+        print(f'- Changing hardware level to {hw_level} ({HardwareLevel(hw_level).name})')
 
-    assert len(rep) == len(pattern.replacement)
-    pattern.replacement = rep
-    return mod
+    # Replace the selected constructor's instructions with ours
+    mod.append(return_ins.bytes)
+    mod = b''.join(mod)
+    if len(mod) > unused_constructor.size:
+        abort('The mod doesn\'t fit in the unused constructor')
+    yield unused_constructor.address, mod
+
+    # Replace createExynosCameraSensorInfo's return instruction with a branch to the mod
+    branch_offset = unused_constructor.address - (createExynosCameraSensorInfo.address + return_ins.address)
+    return_ins_address = createExynosCameraSensorInfo.address + return_ins.address
+    yield return_ins_address, asm(f'b #{branch_offset}', aarch64)
 
 ########################################################################
 def parse_args() -> argparse.Namespace:
@@ -717,26 +742,27 @@ def main():
         base, _ = os.path.splitext(file.name)
         output_path = f'{base}_patched.so'
 
-        data = file.read()
-        data_len = len(data)
+        lib_data = bytearray(file.read())
+        original_len = len(lib_data)
+        lib = lief.parse(file.name)
         file.close()
 
         print(f'\n[*] Patching "{file.name}"...')
-        mod = build_sensor_info_struct_mod(
-            lib_data=data,
+        for address, bytes in createExynosCameraSensorInfo_mod(
+            lib=lib,
             enable_capabilities=args.enable_cap,
             disable_capabilities=args.disable_cap,
             hw_level=args.hardware_level,
             skip_depth_cameras=args.skip_depth
-        )
+        ):
+            apply_patch(lib_data, lib, address, bytes)
 
-        data = apply_modification(data, mod)
-        with open(output_path, 'wb') as f:
-            f.write(data)
-            print(f'[*] Patched lib saved as "{output_path}"')
+        if len(lib_data) != original_len:
+            abort('The size of the patched lib was modified')
+        with open(output_path, 'wb') as out_file:
+            out_file.write(lib_data)
 
-        # Ensure we didn't add nor remove instructions
-        assert len(data) == data_len
+        print(f'[+] Patched lib saved as "{output_path}"')
         out_libs.append(output_path)
 
     # Create Magisk module
@@ -745,31 +771,31 @@ def main():
         and args.android_version is not None
         and args.version is not None
     ):
-        mods = ''
+        mods = []
         if args.enable_cap is not None:
-            mods += (
-                'enables [' + ', '.join([Capability(x).name for x in args.enable_cap]) + '], '
-            )
+            mods.append(f'enables {[Capability(x).name for x in args.enable_cap]}')
         if args.disable_cap is not None:
-            mods += (
-                'disables [' + ', '.join([Capability(x).name for x in args.disable_cap]) + '], '
-            )
+            mods.append(f'disables {[Capability(x).name for x in args.disable_cap]}')
         if args.hardware_level is not None:
-            mods += f'sets the hardware level to {HardwareLevel(args.hardware_level).name}, '
+            mods.append(f'sets hardware level to {HardwareLevel(args.hardware_level).name}')
 
-        mods = mods[0].upper() + mods[1:-2]
         create_magisk_module(
             out_libs, args.model,
-            str(args.android_version), str(args.version), mods
+            str(args.android_version), str(args.version),
+            ', '.join(mods)
         )        
 
-def apply_modification(lib_data: bytes, mod: LibModification) -> bytes:
-    patched_data = mod.try_patch(lib_data)
-    if patched_data is None:
-        abort(f'Could not apply "{mod.name}"')
+def apply_patch(data: bytearray, lib: lief.ELF.Binary, address: int, patch: bytes):
+    # We avoid patching with LIEF because it makes too many modifications to the binary
+    for seg in lib.segments:
+        seg_va = seg.virtual_address
+        seg_size = seg.virtual_size
+        if seg_va <= address < seg_va + seg_size:
+            file_address = seg.file_offset + (address - seg_va)
+            data[file_address:file_address + len(patch)] = patch
+            return
 
-    print(f'[+] Applied "{mod.name}"')
-    return patched_data
+    abort(f'Failed to translate virtual address {hex(address)} to file offset')
 
 def create_magisk_module(
         libs: list[str], 
