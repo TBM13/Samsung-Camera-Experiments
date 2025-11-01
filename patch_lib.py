@@ -123,7 +123,7 @@ class Function:
                 for pattern in thunk_patterns:
                     for i, expected in enumerate(pattern):
                         ins = instructions[i]
-                        if (ins.mnemonic != expected and f'{ins.mnemonic} {ins.op_str}' != expected):
+                        if ins.mnemonic != expected and f'{ins.mnemonic} {ins.op_str}' != expected:
                             break
                     else:
                         is_thunk = True
@@ -746,6 +746,9 @@ def main():
         original_len = len(lib_data)
         lib = lief.parse(file.name)
         file.close()
+
+        if lib is None:
+            abort(f'Failed to parse "{file.name}" as an ELF binary')
 
         print(f'\n[*] Patching "{file.name}"...')
         for address, bytes in createExynosCameraSensorInfo_mod(
