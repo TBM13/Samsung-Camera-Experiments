@@ -155,15 +155,15 @@ def apply_patch(data: bytearray, lib: lief.ELF.Binary, address: int, patch: byte
     abort(f'Failed to translate virtual address {hex(address)} to file offset')
 
 ########################################################################
-cs_thumb = Cs(CS_ARCH_ARM, CS_MODE_THUMB + CS_MODE_LITTLE_ENDIAN)
+cs_thumb = Cs(CS_ARCH_ARM, CS_MODE_THUMB | CS_MODE_LITTLE_ENDIAN)
 cs_thumb.detail = True
-cs_arm64 = Cs(CS_ARCH_ARM64, CS_MODE_LITTLE_ENDIAN)
-cs_arm64.detail = True
-ks_thumb = Ks(KS_ARCH_ARM, KS_MODE_THUMB + KS_MODE_LITTLE_ENDIAN)
+cs_aarch64 = Cs(CS_ARCH_ARM64, CS_MODE_LITTLE_ENDIAN)
+cs_aarch64.detail = True
+ks_thumb = Ks(KS_ARCH_ARM, KS_MODE_THUMB | KS_MODE_LITTLE_ENDIAN)
 ks_aarch64 = Ks(KS_ARCH_ARM64, KS_MODE_LITTLE_ENDIAN)
 
 def disasm(instructions: bytes, aarch64: bool) -> Generator[CsInsn, None, None]:
-    cs = cs_arm64 if aarch64 else cs_thumb
+    cs = cs_aarch64 if aarch64 else cs_thumb
     return cs.disasm(instructions, 0x0)
 
 def asm(instruction: str, aarch64: bool) -> bytes:
@@ -235,7 +235,7 @@ def branch_pattern(
         label_or_reg: str|None = None
 ) -> tuple[str, str]:
     label_or_reg = sanitize(label_or_reg)
-    label_or_reg = fr'^(?:#{label_or_reg or IMMEDIATE}|{label_or_reg or register(aarch64)})$'
+    label_or_reg = fr'^(?:#?{label_or_reg or IMMEDIATE}|{label_or_reg or register(aarch64)})$'
 
     if not aarch64:
         return r'^(b|bx|bl|blx)$', label_or_reg
