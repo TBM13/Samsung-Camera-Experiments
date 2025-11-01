@@ -1,7 +1,0 @@
-id=TBM13-CamExperiments-R-A20
-name=Samsung Camera Experiments (A20) (R)
-version=v2.1.2
-versionCode=11
-author=TBM13
-description=Enables Raw Capture and sets the camera Hardware Level to Full
-updateJson=https://raw.githubusercontent.com/TBM13/Samsung-Camera-Experiments/master/Modules/update_a20.json
