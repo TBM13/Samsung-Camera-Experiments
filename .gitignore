@@ -1,4 +1,5 @@
 *.i64
+*.so
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
