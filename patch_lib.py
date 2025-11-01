@@ -351,16 +351,17 @@ def main():
     ):
         mods = []
         if args.enable_cap is not None:
-            mods.append(f'enables {[Capability(x).name for x in args.enable_cap]}')
+            mods.append(f'enables ' + ', '.join([Capability(x).name for x in args.enable_cap]))
         if args.disable_cap is not None:
-            mods.append(f'disables {[Capability(x).name for x in args.disable_cap]}')
+            mods.append(f'disables ' + ', '.join([Capability(x).name for x in args.disable_cap]))
         if args.hardware_level is not None:
             mods.append(f'sets hardware level to {HardwareLevel(args.hardware_level).name}')
 
         create_magisk_module(
-            out_libs, args.model,
-            str(args.android_version), str(args.version),
-            ', '.join(mods)
+            lib_name='libexynoscamera3.so',
+            libs=out_libs,
+            model=args.model, android_version=args.android_version,
+            module_version=args.version, description=', '.join(mods)
         )
 
 if __name__ == '__main__':
