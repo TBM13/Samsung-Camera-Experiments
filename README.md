@@ -1,18 +1,20 @@
 # Samsung Camera Experiments
-This repository contains a Python script that patches the `libexynoscamera3.so` camera lib of Exynos devices to enable different features.
+This repository contains a Python script that can patch the `libexynoscamera3.so` camera lib of Exynos devices and enable/modify different features.
 
 Requires Python 3.10 or higher. Make sure to install the dependencies too (`pip install -r requirements.txt`).
 
 ### libexynoscamera3.so
-Usually located at `/vendor/lib/libexynoscamera3.so` and/or `/vendor/lib64/libexynoscamera3.so`. Some devices have both but only use one, it's suggested to patch both in that case.
-
-> Some newer Exynos devices like the Galaxy A55 don't have this library. Those aren't supported by this script at the moment.
+Usually located at `/vendor/lib/libexynoscamera3.so` and/or `/vendor/lib64/libexynoscamera3.so`. \
+Some devices have both but only use one, it's suggested to patch both in that case.
 
 If the script fails to patch your lib, open an issue with your device model, Android version and attach the lib.
 
+> [!IMPORTANT]
+> Newer Exynos devices no longer include `libexynoscamera3.so`; they now use the newer lib `camera.s5eXXXX.so`. \
+> These devices are currently not supported.
+
 ## Features
-The following camera features can be enabled or modified. \
-Keep in mind that enabling them **doesn't mean they will work as expected** nor that something will change. It's up to you to test the modifications.
+The following camera features can be enabled or modified. Enabling them **doesn't mean they will work as expected**, it's up to you to test them.
 
 #### Hardware Level
 * 0 ([LIMITED](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata#INFO_SUPPORTED_HARDWARE_LEVEL_LIMITED))
@@ -31,7 +33,7 @@ Keep in mind that enabling them **doesn't mean they will work as expected** nor 
     * [RAW](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata#REQUEST_AVAILABLE_CAPABILITIES_RAW) (16)
 * Others
     * [ZSL (Zero Shutter Lag) and Private Reprocessing](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata#REQUEST_AVAILABLE_CAPABILITIES_PRIVATE_REPROCESSING) (32)
-        * This causes issues with some apps on the A20, A20e and A30 since they don't support ZSL. You can use [this app](https://github.com/sonyxperiadev/CameraTest) to check whether it works on your device.
+        * Enabling this causes issues with some apps on the A20, A20e and A30 since they don't support ZSL. You can use [this app](https://github.com/sonyxperiadev/CameraTest) to check if ZSL works on your device.
     * [YUV Reprocessing](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata#REQUEST_AVAILABLE_CAPABILITIES_YUV_REPROCESSING) (64)
     * [Depth Output](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata#REQUEST_AVAILABLE_CAPABILITIES_DEPTH_OUTPUT) (128)
     * [Constrained High Speed Video](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata#REQUEST_AVAILABLE_CAPABILITIES_CONSTRAINED_HIGH_SPEED_VIDEO) (256)
@@ -78,12 +80,12 @@ Magisk Module:
 `python3 ./patch_lib.py libexynoscamera3.so --enable-cap 16 32 --hardware-level 1` will enable the RAW & ZSL capabilities and set the hardware level to FULL.
 
 ## Troubleshooting
-If Android doesn't show show any cameras, this means the camera lib crashed:
-  * Can happen if your device has a depth camera, try patching with `--skip-depth`.
-  * Someone [has reported](https://github.com/TBM13/Samsung-Camera-Experiments/issues/7#issuecomment-1949522917) that they had to move the lib to `/vendor/lib64/hw/`. Try it if you see something like `dlopen failed: library "libexynoscamera3.so" not found` in the logcat.
+If Android doesn't show show any cameras, this means the lib crashed:
+  * If your device has a depth camera, try patching with `--skip-depth`.
+  * Someone [has reported](https://github.com/TBM13/Samsung-Camera-Experiments/issues/7#issuecomment-1949522917) they had to move the lib to `/vendor/lib64/hw/`. Try it if you see something like `dlopen failed: library "libexynoscamera3.so" not found` in the logs.
 
 ## GCam tests after enabling the RAW capability
-**Note:** If you test this on a device not listed here or you have any issue/weird behaviour, please let me know.
+**Note:** If you test GCam on a device not listed here or you have any issue/weird behaviour, let me know.
 
 Most tests were done using [BSG's GCam 8.1](https://www.celsoazevedo.com/files/android/google-camera/dev-bsg/f/dl88/), as it seems to be the most stable one on Exynos devices that do have GCam working.
 |Device Name|SoC|GCam Works?|Notes|
@@ -103,4 +105,5 @@ Most tests were done using [BSG's GCam 8.1](https://www.celsoazevedo.com/files/a
 |Galaxy M31s|Exynos 9611|Partially|<table><th>Android 12</th><tr><td>Photos have pink tint. Changing black level doesn't help</td></tr></table>|
 |Galaxy M34 5G|Exynos 1280|X|<table><th>Android 13</th><tr><td>Saves black pics when HDR is on</td></tr></table>|
 
-As it can be seen, GCam only seems to be usable on the Exynos 7884/7904 series. As someone who had an A20, I can say that the difference in quality with the stock camera is huge. You can check that yourself with [this comparison](https://cdn.knightlab.com/libs/juxtapose/latest/embed/index.html?uid=9fea4384-35b8-11f0-bb24-0936e1cb08fb) of two pics I took a few years ago.
+As you can see, GCam is usable only on a few Exynos devices. \
+As someone who had an A20, I can say that the difference in quality with the stock camera is huge. You can check it yourself with [this comparison](https://cdn.knightlab.com/libs/juxtapose/latest/embed/index.html?uid=9fea4384-35b8-11f0-bb24-0936e1cb08fb) of two pics I took.
