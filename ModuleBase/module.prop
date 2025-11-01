@@ -1,6 +1,0 @@
-id=TBM13-PatchedLib-$MODEL-$ANDROIDVERSION
-name=Patched libexynoscamera3 lib ($MODEL) (Android $ANDROIDVERSION)
-version=v$VERSION
-versionCode=$VERSION
-author=TBM13
-description=$MODS

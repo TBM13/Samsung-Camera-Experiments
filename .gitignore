@@ -1,5 +1,8 @@
-*.i64
 *.so
+*.i64
+*.id*
+*.nam
+*.til
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
