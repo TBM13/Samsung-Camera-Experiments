@@ -128,15 +128,24 @@ class TestLibs(unittest.TestCase):
                 lines = out.splitlines()
 
             print(out)
+
+            # Check that all used camera constructors were detected
+            constructor_call_lines = [
+                line for line in lines if line.startswith('- Constructor for')
+            ]
             for cam_name in lib_data.used_camera_names:
-                self.assertIn(f'- Constructor for {cam_name} is called', lines)
+                self.assertIn(f'- Constructor for {cam_name} is called', constructor_call_lines)
+            self.assertEqual(len(constructor_call_lines), len(lib_data.used_camera_names))
 
             unused_constructor_addr, _ = mod[0]
             return_addr, _ = mod[1]
 
+            # Check return instruction address
             self.assertEqual(return_addr, lib_data.return_ins_address)
             constructor = Function.from_address(lib, unused_constructor_addr)
             self.assertNotEqual(constructor, None)
+
+            # Check that the selected constructor isn't one of the used
             cons_name = constructor.name.upper()
             self.assertNotIn("INFOBASE", cons_name)
             for cam_name in lib_data.used_camera_names:
