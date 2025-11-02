@@ -22,9 +22,10 @@ class Capability(enum.IntEnum):
     SystemCamera = 1024
     OfflineProcessing = 2048
     ControlZoom = 4096
-    LensCA = 8192
+    LensCal = 8192
     StreamUseCase = 16384
     DynamicRangeTenBit = 32768
+    ColorSpaceProfiles = 65536
 
 def capabilities_mod(lib: lief.ELF.Binary,
                      enable_capabilities: list[int]
