@@ -12,17 +12,17 @@ from common.utils import abort, create_magisk_module
 from common.patch_utils import *
 
 class Capability(enum.IntEnum):
-    MANUAL_SENSOR_AND_READ_SENSOR_SETTINGS = 2
-    MANUAL_POST_PROCESSING = 4
-    BURST_CAPTURE = 8
+    ManualSensor_ReadSensorSettings = 2
+    ManualPostProcessing = 4
+    BurstCapture = 8
     RAW = 16
-    ZSL_AND_PRIVATE_REPROCESSING = 32
-    YUV_REPROCESSING = 64
-    DEPTH_OUTPUT = 128
-    CONSTRAINED_HIGH_SPEED_VIDEO = 256
-    MOTION_TRACKING = 512
-    LOGICAL_MULTI_CAMERA = 1024
-    SECURE_IMAGE_DATA = 2048
+    ZSL_PrivateReprocessing = 32
+    YUVReprocessing = 64
+    DepthOutput = 128
+    ConstrainedHighSpeedVideo = 256
+    MotionTracking = 512
+    LogicalMultiCamera = 1024
+    SecureImageData = 2048
 
 def find_capabilities_and_hw_level_offsets(lib: lief.ELF.Binary) -> tuple[int, int]:
     aarch64 = lib.header.machine_type == lief.ELF.ARCH.AARCH64
@@ -160,12 +160,12 @@ def createExynosCameraSensorInfo_mod(
         if aarch64:
             mod.extend([
                 # Skip next instruction (return) if depth output capability is not set
-                asm(f'tbz {free_reg}, #{int(math.log2(Capability.DEPTH_OUTPUT))}, #8', aarch64),
+                asm(f'tbz {free_reg}, #{int(math.log2(Capability.DepthOutput))}, #8', aarch64),
                 return_ins.bytes
             ])
         else:
             mod.extend([
-                asm(f'tst {free_reg}, {Capability.DEPTH_OUTPUT}', aarch64),
+                asm(f'tst {free_reg}, {Capability.DepthOutput}', aarch64),
                 # Skip next instruction (return) if depth output capability is not set
                 asm(f'beq #{2 + return_ins.size}', aarch64),
                 return_ins.bytes
@@ -189,7 +189,7 @@ def createExynosCameraSensorInfo_mod(
                 asm(f'orr {free_reg}, {free_reg}, {free_reg2}', aarch64)
             ])
 
-        caps = ', '.join([Capability(x).name for x in enable_capabilities])
+        caps = ', '.join([Capability(x).name + f' ({x})' for x in enable_capabilities])
         print(f'- Enabling capabilities: {caps}')
     if disable_capabilities is not None:
         mask = 0xFFFF
@@ -207,7 +207,7 @@ def createExynosCameraSensorInfo_mod(
                 asm(f'and {free_reg}, {free_reg}, {free_reg2}', aarch64)
             ])
 
-        caps = ', '.join([Capability(x).name for x in disable_capabilities])
+        caps = ', '.join([Capability(x).name + f' ({x})' for x in disable_capabilities])
         print(f'- Disabling capabilities: {caps}')
 
     # Save available capabilities
@@ -242,24 +242,36 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         'libs', type=argparse.FileType('rb'), nargs='+',
-        help='Path(s) of the libexynoscamera3.so lib(s) to patch'
+        help='Path(s) of the lib(s) that will be patched'
     )
 
     mod_options = parser.add_argument_group('Lib Modifications')
+    hw_level_map = {
+        name.lower(): level.value for name, level in SupportedHardwareLevel.__members__.items()
+    }
+    capabilities_map = {
+        name.lower(): cap.value for name, cap in Capability.__members__.items()
+    }
+
     mod_options.add_argument(
-        '--hardware-level', type=int,
-        choices=list(SupportedHardwareLevel),
+        '--hardware-level',
+        type=lambda v: hw_level_map.get(v.lower()) or abort(f'Invalid hardware level: {v}'),
+        metavar='HARDWARE_LEVEL',
         help='The hardware level that will be set'
     )
     mod_options.add_argument(
-        '--enable-cap', type=int,
-        choices=list(Capability), nargs='+',
-        help='The capabilities that will be enabled, separated by spaces'
+        '--enable-cap',
+        type=lambda v: capabilities_map.get(v.lower()) or abort(f'Invalid capability: {v}'),
+        nargs='+',
+        metavar='CAPABILITY',
+        help='The capabilities that will be enabled, separated by space.'
     )
     mod_options.add_argument(
-        '--disable-cap', type=int,
-        choices=list(Capability), nargs='+',
-        help='The capabilities that will be disabled, separated by spaces'
+        '--disable-cap',
+        type=lambda v: capabilities_map.get(v.lower()) or abort(f'Invalid capability: {v}'),
+        nargs='+',
+        metavar='CAPABILITY',
+        help='The capabilities that will be disabled, separated by space.'
     )
     mod_options.add_argument(
         '--skip-depth', action='store_true',
@@ -271,7 +283,7 @@ def parse_args() -> argparse.Namespace:
 
     module_options = parser.add_argument_group(
         'Magisk Module',
-        'If the following settings are provided, a Magisk module with the patched lib(s) will be created'
+        'If all the following args are provided, a Magisk module with the patched lib(s) will be created'
     )
     module_options.add_argument(
         '--model', type=str,
@@ -285,6 +297,11 @@ def parse_args() -> argparse.Namespace:
         '--version', type=int,
         help='The module version (e.g. 1)'
     )
+
+    parser.formatter_class = argparse.RawDescriptionHelpFormatter
+    parser.epilog = 'HARDWARE_LEVEL can be:\n  ' + '\n  '.join([lvl.name for lvl in SupportedHardwareLevel])
+    parser.epilog += '\n\n'
+    parser.epilog += 'CAPABILITY can be:\n  ' + '\n  '.join([c.name for c in Capability])
 
     return parser.parse_args()
 

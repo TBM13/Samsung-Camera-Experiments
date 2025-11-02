@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import lief
 
-from patch_lib import *
+from patch_libexynoscamera3 import *
 
 
 class LibData:
@@ -90,7 +90,7 @@ LIBS_DATA = [
     LibData("f62_t_64.so", 0x8cc, 0x8d0, 0xD21C8, ["GC5035", "IMX682", "3L6", "IMX616"]),
 ]
 
-class TestLibs(unittest.TestCase):
+class TestLibexynoscamera3(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.zip = zipfile.ZipFile('tests/libexynoscamera3.zip', 'r')
