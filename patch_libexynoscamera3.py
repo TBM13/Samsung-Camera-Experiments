@@ -7,39 +7,22 @@ import re
 from typing import Generator
 
 import lief
+from common.android_camera_metadata import SupportedHardwareLevel
 from common.utils import abort, create_magisk_module
 from common.patch_utils import *
 
 class Capability(enum.IntEnum):
-    # These three are automatically enabled if the hardware level is 1 (FULL)
     MANUAL_SENSOR_AND_READ_SENSOR_SETTINGS = 2
     MANUAL_POST_PROCESSING = 4
     BURST_CAPTURE = 8
-
-    # If this is disabled, GCam doesn't work and shows a black screen in photo mode.
-    # Enabling it is enough to make it work on some devices
     RAW = 16
-
     ZSL_AND_PRIVATE_REPROCESSING = 32
     YUV_REPROCESSING = 64
-    # Used only on depth cameras
     DEPTH_OUTPUT = 128
     CONSTRAINED_HIGH_SPEED_VIDEO = 256
     MOTION_TRACKING = 512
     LOGICAL_MULTI_CAMERA = 1024
     SECURE_IMAGE_DATA = 2048
-
-class HardwareLevel(enum.IntEnum):
-    # Default level on most Exynos devices
-    LIMITED = 0
-    # Full level automatically enables the capabilities mentioned before
-    FULL = 1
-    # Legacy level will disable some features
-    LEGACY = 2
-    # The lib doesn't seem to expect the level to be 3, so it'll probably behave like LIMITED
-    LEVEL_3 = 3
-    # For external cameras
-    EXTERNAL = 4
 
 def find_capabilities_and_hw_level_offsets(lib: lief.ELF.Binary) -> tuple[int, int]:
     aarch64 = lib.header.machine_type == lief.ELF.ARCH.AARCH64
@@ -240,7 +223,7 @@ def createExynosCameraSensorInfo_mod(
             asm(f'{mov} {free_reg}, #{hw_level}', aarch64),
             asm(f'strb {free_reg}, [{struct_reg}, #{hw_lvl_offset}]', aarch64)  
         ])
-        print(f'- Changing hardware level to {hw_level} ({HardwareLevel(hw_level).name})')
+        print(f'- Changing hardware level to {hw_level} ({SupportedHardwareLevel(hw_level).name})')
 
     # Replace the selected constructor's instructions with ours
     mod.append(return_ins.bytes)
@@ -265,7 +248,7 @@ def parse_args() -> argparse.Namespace:
     mod_options = parser.add_argument_group('Lib Modifications')
     mod_options.add_argument(
         '--hardware-level', type=int,
-        choices=list(HardwareLevel),
+        choices=list(SupportedHardwareLevel),
         help='The hardware level that will be set'
     )
     mod_options.add_argument(
@@ -355,7 +338,7 @@ def main():
         if args.disable_cap is not None:
             mods.append(f'disables ' + ', '.join([Capability(x).name for x in args.disable_cap]))
         if args.hardware_level is not None:
-            mods.append(f'sets hardware level to {HardwareLevel(args.hardware_level).name}')
+            mods.append(f'sets hardware level to {SupportedHardwareLevel(args.hardware_level).name}')
 
         create_magisk_module(
             lib_name='libexynoscamera3.so',
