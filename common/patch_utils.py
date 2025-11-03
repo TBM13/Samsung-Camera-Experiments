@@ -35,8 +35,13 @@ class Function:
         return False
     
     def bytes(self, offset: int = 0, amount: int|None = None) -> bytes:
+        target = self.address + offset
+        if target < 0:
+            print(self._lib.virtual_size)
+            abort(f'Function "{self.name}": requested bytes at invalid offset {hex(offset)}')
+
         return self._lib.get_content_from_virtual_address(
-            self.address + offset, amount or self.size
+            target, amount or self.size
         ).tobytes()
     
     def instructions(self, offset: int = 0,
@@ -109,6 +114,11 @@ class Function:
             target_addr = self.address + offset
             target_func = Function.from_address(self._lib, target_addr)
             if target_func is None:
+                # This can happen on functions that return early
+                # and have junk instructions after the return
+                if target_addr < 0:
+                    continue
+
                 # Check if the function is a thunk
                 is_thunk = False
                 instructions = list(self.instructions(offset, amount=16))

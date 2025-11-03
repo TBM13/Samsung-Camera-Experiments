@@ -86,8 +86,9 @@ LIBS_DATA = [
     # Exynos 9820
     LibData("s10_s.so",   0x8f0, 0x8f8, 0xAE058, ["3M3", "2L4", "3J1", "4HA", "3P9"]),
     # Exynos 9825
-    LibData("f62_r.so",    0x768, 0x770, 0xABBAE, ["GC5035", "IMX682", "3L6", "IMX616"]),
-    LibData("f62_t_64.so", 0x8cc, 0x8d0, 0xD21C8, ["GC5035", "IMX682", "3L6", "IMX616"]),
+    LibData("f62_r.so",          0x768, 0x770, 0xABBAE, ["GC5035", "IMX682", "3L6", "IMX616"]),
+    LibData("f62_t_64.so",       0x8cc, 0x8d0, 0xD21C8, ["GC5035", "IMX682", "3L6", "IMX616"]),
+    LibData("note10plus5g_s.so", 0x900, 0x908, 0xB19FE, ["IMX516", "IMX316", "3M5", "2L4", "3J1", "3P9"])
 ]
 
 class TestLibexynoscamera3(unittest.TestCase):
