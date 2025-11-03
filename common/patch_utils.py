@@ -175,9 +175,23 @@ def disasm(instructions: bytes, aarch64: bool) -> Generator[CsInsn, None, None]:
     cs = cs_aarch64 if aarch64 else cs_thumb
     return cs.disasm(instructions, 0x0)
 
-def asm(instruction: str, aarch64: bool) -> bytes:
+def asm(instructions: str|list[str], aarch64: bool) -> bytes:
     ks = ks_aarch64 if aarch64 else ks_thumb
-    return bytes(ks.asm(instruction)[0])
+
+    if isinstance(instructions, list):
+        res = bytes()
+
+        for ins in instructions:
+            res += bytes(ks.asm(ins)[0])
+        return res
+    
+    return bytes(ks.asm(instructions)[0])
+
+def reg_name(register, aarch64: bool) -> str:
+    if aarch64:
+        return cs_aarch64.reg_name(register)
+
+    return cs_thumb.reg_name(register)
 
 ########################################################################
 HEX = r'(?:0x[0-9a-fA-F]+?)'

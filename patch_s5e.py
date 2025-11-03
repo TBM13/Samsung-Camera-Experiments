@@ -17,6 +17,7 @@ class Capability(enum.IntEnum):
     BurstCapture = 32
     YUVReprocessing = 64
     MotionTracking = 128
+
     LogicalMultiCamera = 256
     SecureImageData = 512
     SystemCamera = 1024
@@ -25,51 +26,165 @@ class Capability(enum.IntEnum):
     LensCal = 8192
     StreamUseCase = 16384
     DynamicRangeTenBit = 32768
+
     ColorSpaceProfiles = 65536
 
 def capabilities_mod(lib: lief.ELF.Binary,
                      enable_capabilities: list[int]
     ) -> Generator[tuple[int, bytes], None, None]:
+    aarch64 = True
+
+    # CameraCapability::getValueStr takes a capabilities bitmask and a string buffer.
+    # It then builds a string listing the enabled capabilities. We can initialize the buffer
+    # to an empty string, return early and replace the following instructions with our mod.
+    getValueStr_func = Function.from_name_single(
+        lib, '^_ZNK16CameraCapability11getValueStrEv$'
+    )
+    print(f'[+] Found CameraCapability::getValueStr function')
+
+    # Search for the empty string initialization at the start of getValueStr
+    movs: dict[str, str] = {}
+    empty_bytes_initialized: dict[str, int] = {}
+    for ins in getValueStr_func.instructions(amount=20 * 4):
+        if ins.mnemonic == 'mov':
+            dst = reg_name(ins.operands[0].reg, aarch64)
+            src = reg_name(ins.operands[1].reg, aarch64)
+            movs[dst] = src
+        
+        elif ins.mnemonic == 'stp':
+            src1 = reg_name(ins.operands[0].reg, aarch64)
+            src2 = reg_name(ins.operands[1].reg, aarch64)
+            if src1 != 'xzr' or src2 != 'xzr':
+                continue
+
+            dst = reg_name(ins.operands[2].reg, aarch64)
+            offset = ins.operands[2].mem.disp
+            if offset != 0 and offset != 8:
+                abort(f'Unexpected offset {offset} in empty string initialization')
+
+            empty_bytes_initialized.setdefault(dst, 0)
+            empty_bytes_initialized[dst] += 8
+        
+        elif ins.mnemonic == 'str':
+            src = reg_name(ins.operands[0].reg, aarch64)
+            if src != 'xzr':
+                continue
+
+            dst = reg_name(ins.operands[1].reg, aarch64)
+            offset = ins.operands[1].mem.disp
+            if offset != 0 and offset != 16:
+                abort(f'Unexpected offset {offset} in empty string initialization')
+
+            empty_bytes_initialized.setdefault(dst, 0)
+            empty_bytes_initialized[dst] += 4
+
+    if len(empty_bytes_initialized) == 0:
+        abort('Failed to find empty string initialization')
+    if len(empty_bytes_initialized) > 1:
+        abort('Multiple possible empty string initializations found')
+    str_reg, initialized_bytes = next(iter(empty_bytes_initialized.items()))
+    if initialized_bytes != 4 * 3:  # the empty string should have 3 null bytes
+        abort(f'Unexpected number of initialized bytes ({initialized_bytes})')
+    if str_reg in movs:
+        str_reg = movs[str_reg]
+        if str_reg in movs:
+            abort(f'Too many movs to resolve register {str_reg}')
+
+    print(f'[+] Found string register {str_reg}')
+    first_instructions = list(getValueStr_func.instructions(amount=8))
+
+    # Initialize empty string at the start of the function and return
+    empty_string_initialization = bytes()
+    has_paciasp = False
+    if first_instructions[0].mnemonic == 'paciasp':
+        # Preserve paciasp, otherwise lib will crash
+        empty_string_initialization += getValueStr_func.bytes(amount=4)
+        sp_reservation = first_instructions[1]
+        has_paciasp = True
+    else:
+        sp_reservation = first_instructions[0]
+
+    if (sp_reservation.mnemonic != 'sub'
+        or reg_name(sp_reservation.operands[0].reg, aarch64) != 'sp'
+        or reg_name(sp_reservation.operands[1].reg, aarch64) != 'sp'
+    ):
+        abort(f'Unexpected instruction "{sp_reservation.mnemonic} {sp_reservation.op_str}"')
+
+    empty_string_initialization += asm([
+        # empty string initialization
+        f'STP XZR, XZR, [{str_reg}]',
+        f'STR XZR, [{str_reg}, #16]',
+    ], aarch64)
+    if has_paciasp:
+        empty_string_initialization += b'\xBF\x23\x03\xD5'  # AUTIASP
+    empty_string_initialization += asm('RET', aarch64)
+
+    yield getValueStr_func.address, empty_string_initialization
+
+    # Prepare mod
+    mod: list[bytes] = []
+    mod_tail: list[bytes] = []
+    mod_address = getValueStr_func.address + len(empty_string_initialization)
+
+    # CameraCapability::init takes the hw level and the camera's capabilities bitmask,
+    # then sets the hw level and adds more capabilities (or not) depending on its value.
     init_func = Function.from_name_single(
         lib, '^_ZN16CameraCapability4initEh29AvailableCameraCapabilityType$'
     )
+    bitmask_reg = 'x2'
     print(f'[+] Found CameraCapability::init function')
 
-    # CameraCapability::init takes an int and the camera's capabilities bitmask
-    # That int is presumably the hw level and depending on its value, extra capabilities are enabled:
-    # 0 (LIMITED): BackwardCompatible
-    # 1 (FULL)   : BackwardCompatible, ManualSensor_ReadSensorSettings, ManualPostProcessing, BurstCapture
-    # 3 (LEVEL 3): BackwardCompatible, ManualSensor_ReadSensorSettings, ManualPostProcessing, BurstCapture, RAW, YUVReprocessing
-    # We will add our capabilities to those three cases
-    value = 1
+    first_instructions: list[CsInsn] = list(init_func.instructions(amount=8))
+    if first_instructions[0].mnemonic == 'bti':
+        init_mov_ins = first_instructions[1]
+    else:
+        init_mov_ins = first_instructions[0]
+
+    if init_mov_ins.mnemonic != 'mov':
+        abort(f'Unexpected first instruction {init_mov_ins.mnemonic}')
+    # MOV <reg>, #1   - We can consider reg free
+    free_reg = reg_name(init_mov_ins.operands[0].reg, aarch64).replace('w', 'x')
+    print(f'[+] Found free register {free_reg}')
+
+    # Add the mov at the end of the mod
+    mod_tail.append(init_mov_ins.bytes)
+    # Replace init's mov with a branch to the mod
+    branch_offset = mod_address - (init_func.address + init_mov_ins.address)
+    yield init_func.address + init_mov_ins.address, asm(f'b #{branch_offset}', aarch64)
+
+    ########################## MOD ##########################
+    # When exiting the mod we want to execute whatever was after the MOV instruction
+    exit_address = init_func.address + init_mov_ins.address + init_mov_ins.size
+
+    # Enable capabilities (modify bitmask argument)
+    value = 0
     for cap in enable_capabilities:
         value |= cap
+    try:
+        mod.append(
+            asm(f'orr {bitmask_reg}, {bitmask_reg}, #{value}', aarch64)
+        )
+    except KsError:
+        # ORR doesn't support the immediate value, so store it in a register
+        mod.extend([
+            asm(f'mov {free_reg}, #{value}', aarch64),
+            asm(f'orr {bitmask_reg}, {bitmask_reg}, {free_reg}', aarch64)
+        ])
 
     caps = ', '.join([Capability(x).name + f' ({x})' for x in enable_capabilities])
     print(f'- Enabling capabilities: {caps}')
 
-    mov_amount = 0
-    register = None
-    for ins in init_func.instructions():
-        if ins.mnemonic != 'mov':
-            continue
+    # Exit mod
+    mod += mod_tail
+    mod_size = sum(len(b) for b in mod)
+    branch_offset = exit_address - (mod_address + mod_size)
+    mod.append(asm(f'b #{branch_offset}', aarch64))
 
-        mov_amount += 1
-        reg_name = cs_aarch64.reg_name(ins.operands[0].reg)
-        register = register or reg_name
-        if reg_name != register:
-            abort(f'Register {ins.operands[0].reg} does not match {register}')
+    mod = b''.join(mod)
+    if len(mod) > getValueStr_func.size - (mod_address - getValueStr_func.address):
+        abort('Mod doesn\'t fit in the available space')
 
-        immediate = ins.operands[1].imm
-        if immediate not in (1, 39, 111):
-            abort(f'Unexpected immediate {immediate}')
-
-        yield init_func.address + ins.address, asm(
-            f'mov {register}, #{value | immediate}', True
-        )
-
-    if mov_amount != 3:
-        abort(f'Unexpected number of mov instructions ({mov_amount})')
+    yield mod_address, mod
 
 ########################################################################
 def parse_args() -> argparse.Namespace:
