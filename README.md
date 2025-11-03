@@ -7,7 +7,7 @@ Both scripts require Python 3.10 or higher. \
 Make sure to clone/download the whole repository (and not just the `patch_*.py` script) & install the dependencies too (`pip install -r requirements.txt`).
 
 #### libexynoscamera3.so
-Usually located at `/vendor/lib/libexynoscamera3.so` and/or `/vendor/lib64/libexynoscamera3.so`. \
+Located at `/vendor/lib/libexynoscamera3.so` and/or `/vendor/lib64/libexynoscamera3.so`. \
 Some devices have both but only use one; it's suggested to patch both in that case.
 
 #### camera.s5eXXXX.so
@@ -17,7 +17,8 @@ Its name may vary depending your device, for example the Galaxy A54's lib is nam
 If the script fails to patch your lib, open an issue with your device model, Android version and attach the lib.
 
 ## Usage, features & troubleshooting
-Enabling or modifying something **doesn't mean it will work as expected** (it may even not do anything at all). It's up to you to test everything.
+> [!WARNING]
+> Enabling or modifying something **doesn't mean it will work as expected** (it may even not do anything at all). It's up to you to test everything.
 
 <details>
 <summary><b>libexynoscamera3.so</b></summary>
