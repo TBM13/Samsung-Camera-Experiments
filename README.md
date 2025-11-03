@@ -64,13 +64,13 @@ Example: \
 `python3 ./patch_lib.py libexynoscamera3.so --hardware-level FULL` will set the Hardware Level to FULL on all cameras.
 
 #### Capabilities
-* These three are automatically enabled by the library if the Hardware Level is set to FULL:
+* These are enabled by the lib if the Hardware Level is set to **FULL**:
     * **ManualSensor_ReadSensorSettings** ([MANUAL_SENSOR](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata#REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR) and [READ_SENSOR_SETTINGS](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata#REQUEST_AVAILABLE_CAPABILITIES_READ_SENSOR_SETTINGS))
     * **ManualPostProcessing** ([MANUAL_POST_PROCESSING](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata#REQUEST_AVAILABLE_CAPABILITIES_MANUAL_POST_PROCESSING))
     * **BurstCapture** ([BURST_CAPTURE](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata#REQUEST_AVAILABLE_CAPABILITIES_BURST_CAPTURE))
-* If this one is disabled, GCam doesn't work and shows a black screen in photo mode. Enabling it is enough to make it work on some devices:
-    * [**RAW**](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata#REQUEST_AVAILABLE_CAPABILITIES_RAW)
 * Others
+    * [**RAW**](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata#REQUEST_AVAILABLE_CAPABILITIES_RAW)
+      * If disabled, GCam doesn't work and shows a black screen in photo mode. Enabling it should be enough to make it work on some devices.
     * **ZSL_PrivateReprocessing** (Zero Shutter Lag and [PRIVATE_REPROCESSING](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata#REQUEST_AVAILABLE_CAPABILITIES_PRIVATE_REPROCESSING))
         * Enabling this causes issues with some apps on the A20, A20e and A30 since these devices don't support ZSL. You can use [this app](https://github.com/sonyxperiadev/CameraTest) to test ZSL.
     * **YUVReprocessing** ([YUV_REPROCESSING](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata#REQUEST_AVAILABLE_CAPABILITIES_YUV_REPROCESSING))
@@ -81,9 +81,9 @@ Example: \
     * **SecureImageData** ([SECURE_IMAGE_DATA](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata#REQUEST_AVAILABLE_CAPABILITIES_SECURE_IMAGE_DATA))
 
 Examples: \
-`python3 ./patch_lib.py libexynoscamera3.so --enable-cap RAW` will enable the RAW capability. \
-`python3 ./patch_lib.py libexynoscamera3.so --enable-cap RAW YUVReprocessing` will enable the RAW and YUV_REPROCESSING capabilities. \
-`python3 ./patch_lib.py libexynoscamera3.so --disable-cap BurstCapture` will disable the BURST_CAPTURE capability.
+`python3 ./patch_lib.py libexynoscamera3.so --enable-cap RAW` enables the RAW capability on all cameras. \
+`python3 ./patch_lib.py libexynoscamera3.so --enable-cap RAW YUVReprocessing` enables the RAW and YUV_REPROCESSING capabilities. \
+`python3 ./patch_lib.py libexynoscamera3.so --disable-cap BurstCapture` disables the BURST_CAPTURE capability.
 
 ### Troubleshooting
 If Android doesn't show show any cameras, it means the lib crashed:
@@ -121,14 +121,16 @@ Magisk Module:
 ```
 
 #### Capabilities
-* If this one is disabled, GCam doesn't work and shows a black screen in photo mode. Enabling it should be enough to make it work:
-    * [**RAW**](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata#REQUEST_AVAILABLE_CAPABILITIES_RAW)
-* Others
+* These are enabled by the lib if the Hardware Level is set to **FULL** or **LEVEL_3**:
     * **ManualSensor_ReadSensorSettings** ([MANUAL_SENSOR](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata#REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR) and [READ_SENSOR_SETTINGS](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata#REQUEST_AVAILABLE_CAPABILITIES_READ_SENSOR_SETTINGS))
     * **ManualPostProcessing** ([MANUAL_POST_PROCESSING](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata#REQUEST_AVAILABLE_CAPABILITIES_MANUAL_POST_PROCESSING))
-    * **PrivateReprocessing** ([PRIVATE_REPROCESSING](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata#REQUEST_AVAILABLE_CAPABILITIES_PRIVATE_REPROCESSING))
     * **BurstCapture** ([BURST_CAPTURE](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata#REQUEST_AVAILABLE_CAPABILITIES_BURST_CAPTURE))
+* These are enabled by the lib if the Hardware Level is set **LEVEL_3**:
+    * [**RAW**](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata#REQUEST_AVAILABLE_CAPABILITIES_RAW)
+      * If disabled, GCam doesn't work and shows a black screen in photo mode. Enabling it should be enough to make it work
     * **YUVReprocessing** ([YUV_REPROCESSING](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata#REQUEST_AVAILABLE_CAPABILITIES_YUV_REPROCESSING))
+* Others
+    * **PrivateReprocessing** ([PRIVATE_REPROCESSING](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata#REQUEST_AVAILABLE_CAPABILITIES_PRIVATE_REPROCESSING))
     * **MotionTracking** ([MOTION_TRACKING](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata#REQUEST_AVAILABLE_CAPABILITIES_MOTION_TRACKING))
     * **LogicalMultiCamera** ([LOGICAL_MULTI_CAMERA](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata#REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA))
     * **SecureImageData** ([SECURE_IMAGE_DATA](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata#REQUEST_AVAILABLE_CAPABILITIES_SECURE_IMAGE_DATA))
@@ -140,15 +142,23 @@ Magisk Module:
     * **DynamicRangeTenBit** ([DYNAMIC_RANGE_TEN_BIT](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata#REQUEST_AVAILABLE_CAPABILITIES_DYNAMIC_RANGE_TEN_BIT))
     * **ColorSpaceProfiles** ([COLOR_SPACE_PROFILES](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata#REQUEST_AVAILABLE_CAPABILITIES_COLOR_SPACE_PROFILES))
 
+Note that some capabilities (specially the ones at the end of the list) may only do something on newer lib versions.
+
 Examples: \
-`python3 ./patch_lib.py camera.s5e8835.so --enable-cap RAW` will enable the RAW capability. \
-`python3 ./patch_lib.py camera.s5e8835.so --enable-cap RAW YUVReprocessing` will enable the RAW and YUV_REPROCESSING capabilities.
+`python3 ./patch_lib.py camera.s5e8835.so --enable-cap RAW` enables the RAW capability on all cameras. \
+`python3 ./patch_lib.py camera.s5e8835.so --enable-cap RAW YUVReprocessing` enables the RAW and YUV_REPROCESSING capabilities.
 
 </details>
 
 ## GCam tests after enabling the RAW capability
 **Note:** If you test GCam on a device not listed here or you have any issue/weird behaviour, let me know.
 
+### camera.s5eXXXX.so
+|Device Name|SoC|GCam Works?|Notes|
+|:-:|:--:|:-:|:-:|
+|Galaxy A54|Exynos 1380 (S5E8835)|✓|Still testing|
+
+### libexynoscamera3.so
 Most tests were done using [BSG's GCam 8.1](https://www.celsoazevedo.com/files/android/google-camera/dev-bsg/f/dl88/), as it seems to be the most stable one on Exynos devices that do have GCam working.
 |Device Name|SoC|GCam Works?|Notes|
 |:-:|:--:|:-:|:-:|
