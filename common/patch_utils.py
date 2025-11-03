@@ -37,7 +37,6 @@ class Function:
     def bytes(self, offset: int = 0, amount: int|None = None) -> bytes:
         target = self.address + offset
         if target < 0:
-            print(self._lib.virtual_size)
             abort(f'Function "{self.name}": requested bytes at invalid offset {hex(offset)}')
 
         return self._lib.get_content_from_virtual_address(
