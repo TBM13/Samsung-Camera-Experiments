@@ -32,7 +32,7 @@ class Capability(enum.IntEnum):
 
 def capabilities_mod(lib: lief.ELF.Binary,
                      hw_level: SupportedHardwareLevel|None = None, 
-                     enable_capabilities: list[int]|None = None
+                     enable_capabilities: list[Capability]|None = None
     ) -> Generator[tuple[int, bytes], None, None]:
     aarch64 = True
 
@@ -172,7 +172,7 @@ def capabilities_mod(lib: lief.ELF.Binary,
     if enable_capabilities is not None:
         value = 0
         for cap in enable_capabilities:
-            value |= cap
+            value |= cap.value
         try:
             mod.append(
                 asm(f'orr {bitmask_reg}, {bitmask_reg}, #{value}', aarch64)
@@ -184,8 +184,8 @@ def capabilities_mod(lib: lief.ELF.Binary,
                 asm(f'orr {bitmask_reg}, {bitmask_reg}, {free_reg}', aarch64)
             ])
 
-        caps = ', '.join([Capability(x).name + f' ({x})' for x in enable_capabilities])
-        print(f'- Enabling capabilities: {caps}')
+        cap = ', '.join([c.name for c in enable_capabilities])
+        print(f'- Enabling capabilities: {cap}')
 
     # Exit mod
     mod += mod_tail
@@ -212,7 +212,7 @@ def parse_args() -> argparse.Namespace:
         name.lower(): level for name, level in SupportedHardwareLevel.__members__.items()
     }
     capabilities_map = {
-        name.lower(): cap.value for name, cap in Capability.__members__.items()
+        name.lower(): cap for name, cap in Capability.__members__.items()
     }
 
     mod_options.add_argument(
@@ -304,7 +304,7 @@ def main():
     ):
         mods = []
         if args.enable_cap is not None:
-            mods.append(f'enables ' + ', '.join([Capability(x).name for x in args.enable_cap]))
+            mods.append(f'enables ' + ', '.join([x.name for x in args.enable_cap]))
         if args.hardware_level is not None:
             mods.append(f'sets hardware level to {args.hardware_level.name}')
 

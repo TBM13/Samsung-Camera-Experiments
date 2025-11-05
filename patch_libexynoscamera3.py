@@ -76,9 +76,9 @@ def find_capabilities_and_hw_level_offsets(lib: lief.ELF.Binary) -> tuple[int, i
 
 def createExynosCameraSensorInfo_mod(
         lib: lief.ELF.Binary,
-        enable_capabilities: list[int]|None = None,
-        disable_capabilities: list[int]|None = None,
-        hw_level: int|None = None,
+        enable_capabilities: list[Capability]|None = None,
+        disable_capabilities: list[Capability]|None = None,
+        hw_level: SupportedHardwareLevel|None = None,
         skip_depth_cameras: bool = False
     ) -> Generator[tuple[int, bytes], None, None]:
     # Camera configs are created on 'createExynosCameraSensorInfo'.
@@ -176,7 +176,7 @@ def createExynosCameraSensorInfo_mod(
     if enable_capabilities is not None:
         value = 0
         for cap in enable_capabilities:
-            value |= cap
+            value |= cap.value
 
         try:
             mod.append(
@@ -189,12 +189,12 @@ def createExynosCameraSensorInfo_mod(
                 asm(f'orr {free_reg}, {free_reg}, {free_reg2}', aarch64)
             ])
 
-        caps = ', '.join([Capability(x).name + f' ({x})' for x in enable_capabilities])
+        caps = ', '.join([x.name for x in enable_capabilities])
         print(f'- Enabling capabilities: {caps}')
     if disable_capabilities is not None:
         mask = 0xFFFF
         for cap in disable_capabilities:
-            mask &= ~cap
+            mask &= ~cap.value
 
         try:
             mod.append(
@@ -207,7 +207,7 @@ def createExynosCameraSensorInfo_mod(
                 asm(f'and {free_reg}, {free_reg}, {free_reg2}', aarch64)
             ])
 
-        caps = ', '.join([Capability(x).name + f' ({x})' for x in disable_capabilities])
+        caps = ', '.join([x.name for x in disable_capabilities])
         print(f'- Disabling capabilities: {caps}')
 
     # Save available capabilities
@@ -220,10 +220,10 @@ def createExynosCameraSensorInfo_mod(
     if hw_level is not None:
         mov = 'mov' if aarch64 else 'movs'
         mod.extend([
-            asm(f'{mov} {free_reg}, #{hw_level}', aarch64),
+            asm(f'{mov} {free_reg}, #{hw_level.value}', aarch64),
             asm(f'strb {free_reg}, [{struct_reg}, #{hw_lvl_offset}]', aarch64)  
         ])
-        print(f'- Changing hardware level to {hw_level} ({SupportedHardwareLevel(hw_level).name})')
+        print(f'- Changing hardware level to {hw_level.name}')
 
     # Replace the selected constructor's instructions with ours
     mod.append(return_ins.bytes)
@@ -247,10 +247,10 @@ def parse_args() -> argparse.Namespace:
 
     mod_options = parser.add_argument_group('Lib Modifications')
     hw_level_map = {
-        name.lower(): level.value for name, level in SupportedHardwareLevel.__members__.items()
+        name.lower(): level for name, level in SupportedHardwareLevel.__members__.items()
     }
     capabilities_map = {
-        name.lower(): cap.value for name, cap in Capability.__members__.items()
+        name.lower(): cap for name, cap in Capability.__members__.items()
     }
 
     mod_options.add_argument(
@@ -351,11 +351,11 @@ def main():
     ):
         mods = []
         if args.enable_cap is not None:
-            mods.append(f'enables ' + ', '.join([Capability(x).name for x in args.enable_cap]))
+            mods.append(f'enables ' + ', '.join([x.name for x in args.enable_cap]))
         if args.disable_cap is not None:
-            mods.append(f'disables ' + ', '.join([Capability(x).name for x in args.disable_cap]))
+            mods.append(f'disables ' + ', '.join([x.name for x in args.disable_cap]))
         if args.hardware_level is not None:
-            mods.append(f'sets hardware level to {SupportedHardwareLevel(args.hardware_level).name}')
+            mods.append(f'sets hardware level to {args.hardware_level.name}')
 
         create_magisk_module(
             lib_name='libexynoscamera3.so',
