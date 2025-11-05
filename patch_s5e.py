@@ -5,8 +5,9 @@ import os
 from typing import Generator
 
 import lief
-from common.utils import abort, create_magisk_module
+from common.android_camera_metadata import SupportedHardwareLevel
 from common.patch_utils import *
+from common.utils import abort, create_magisk_module
 
 class Capability(enum.IntEnum):
     # BackwardCompatible = 1     - Always enabled, so no need to list it
@@ -30,6 +31,7 @@ class Capability(enum.IntEnum):
     ColorSpaceProfiles = 65536
 
 def capabilities_mod(lib: lief.ELF.Binary,
+                     hw_level: SupportedHardwareLevel|None = None, 
                      enable_capabilities: list[int]|None = None
     ) -> Generator[tuple[int, bytes], None, None]:
     aarch64 = True
@@ -159,6 +161,13 @@ def capabilities_mod(lib: lief.ELF.Binary,
     # When exiting the mod we want to execute whatever was after the MOV instruction
     exit_address = init_func.address + init_mov_ins.address + init_mov_ins.size
 
+    # Set hardware level (modify hw level argument)
+    if hw_level is not None:
+        mod.append(
+            asm(f'mov w1, #{hw_level.value}', aarch64)
+        )
+        print(f'- Changing hardware level to {hw_level.name}')
+
     # Enable capabilities (modify bitmask argument)
     if enable_capabilities is not None:
         value = 0
@@ -199,10 +208,19 @@ def parse_args() -> argparse.Namespace:
     )
 
     mod_options = parser.add_argument_group('Lib Modifications')
+    hw_level_map = {
+        name.lower(): level for name, level in SupportedHardwareLevel.__members__.items()
+    }
     capabilities_map = {
         name.lower(): cap.value for name, cap in Capability.__members__.items()
     }
 
+    mod_options.add_argument(
+        '--hardware-level',
+        type=lambda v: hw_level_map.get(v.lower()) or abort(f'Invalid hardware level: {v}'),
+        metavar='HARDWARE_LEVEL',
+        help='The hardware level that will be set'
+    )
     mod_options.add_argument(
         '--enable-cap',
         type=lambda v: capabilities_map.get(v.lower()) or abort(f'Invalid capability: {v}'),
@@ -233,13 +251,16 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.formatter_class = argparse.RawDescriptionHelpFormatter
-    parser.epilog = 'CAPABILITY can be:\n  ' + '\n  '.join([c.name for c in Capability])
+    parser.epilog = 'HARDWARE_LEVEL can be:\n  ' + '\n  '.join([lvl.name for lvl in SupportedHardwareLevel])
+    parser.epilog += '\n\n'
+    parser.epilog += 'CAPABILITY can be:\n  ' + '\n  '.join([c.name for c in Capability])
 
     return parser.parse_args()
 
 def main():
     args = parse_args()
-    if args.enable_cap is None:
+    if (args.hardware_level is None and
+        args.enable_cap is None):
         abort('No modifications specified')
 
     out_libs: list[str] = []
@@ -261,6 +282,7 @@ def main():
         print(f'\n[*] Patching "{file.name}"...')
         for address, bytes in capabilities_mod(
             lib=lib,
+            hw_level=args.hardware_level,
             enable_capabilities=args.enable_cap,
         ):
             apply_patch(lib_data, lib, address, bytes)
@@ -283,6 +305,8 @@ def main():
         mods = []
         if args.enable_cap is not None:
             mods.append(f'enables ' + ', '.join([Capability(x).name for x in args.enable_cap]))
+        if args.hardware_level is not None:
+            mods.append(f'sets hardware level to {args.hardware_level.name}')
 
         create_magisk_module(
             lib_name='hw/' + args.lib_name,

@@ -97,8 +97,8 @@ If Android doesn't show show any cameras, it means the lib crashed:
 <summary><b>camera.s5eXXXX.so</b></summary>
 
 ```
-usage: patch_s5e.py [-h] [--enable-cap CAPABILITY [CAPABILITY ...]] [--lib-name LIB_NAME] [--model MODEL] [--android-version ANDROID_VERSION]
-                    [--version VERSION]
+usage: patch_s5e.py [-h] [--hardware-level HARDWARE_LEVEL] [--enable-cap CAPABILITY [CAPABILITY ...]]
+                    [--lib-name LIB_NAME] [--model MODEL] [--android-version ANDROID_VERSION] [--version VERSION]
                     libs [libs ...]
 
 positional arguments:
@@ -108,6 +108,8 @@ options:
   -h, --help            show this help message and exit
 
 Lib Modifications:
+  --hardware-level HARDWARE_LEVEL
+                        The hardware level that will be set
   --enable-cap CAPABILITY [CAPABILITY ...]
                         The capabilities that will be enabled, separated by space.
 
@@ -120,6 +122,16 @@ Magisk Module:
                         The Android version the lib comes from (e.g. 15)
   --version VERSION     The module version (e.g. 1)
 ```
+#### Hardware Level
+* [LIMITED](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata#INFO_SUPPORTED_HARDWARE_LEVEL_LIMITED)
+* [FULL](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata#INFO_SUPPORTED_HARDWARE_LEVEL_FULL)
+* [LEVEL_3](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata#INFO_SUPPORTED_HARDWARE_LEVEL_3)
+* These are worse than LIMITED so you shouldn't use them:
+   * [LEGACY](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata#INFO_SUPPORTED_HARDWARE_LEVEL_LEGACY)
+   * [EXTERNAL](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata#INFO_SUPPORTED_HARDWARE_LEVEL_EXTERNAL)
+
+Example: \
+`python3 ./patch_lib.py camera.s5e8835.so --hardware-level FULL` will set the Hardware Level to FULL on all cameras.
 
 #### Capabilities
 * These are enabled by the lib if the Hardware Level is set to **FULL** or **LEVEL_3**:
