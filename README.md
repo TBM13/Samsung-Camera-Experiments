@@ -1,24 +1,21 @@
 # Samsung Camera Experiments
 This repository contains two Python scripts that can patch the camera lib of Exynos devices and enable/modify different features:
 * `patch_libexynoscamera3.py` is for older Exynos devices that use the **libexynoscamera3.so** lib.
+  * Located at `/vendor/lib/libexynoscamera3.so` and/or `/vendor/lib64/libexynoscamera3.so`.
+  * If both libs are present, I suggest patching the two of them
 * `patch_s5e.py` is for newer Exynos devices that use the **camera.s5eXXXX.so** lib.
+  * Located at `/vendor/lib64/hw/`.
+  * The exact file name varies depending on your device. Look for something similar to `camera.s5e8835.so`.
 
 Both scripts require Python 3.10 or higher. \
-Make sure to clone/download the whole repository (and not just the `patch_*.py` script) & install the dependencies too (`pip install -r requirements.txt`).
+Make sure to **download the whole repository** (and not just the `patch_*.py` script) & **install the dependencies** too (`pip install -r requirements.txt`).
 
-#### libexynoscamera3.so
-Located at `/vendor/lib/libexynoscamera3.so` and/or `/vendor/lib64/libexynoscamera3.so`. \
-Some devices have both but only use one; it's suggested to patch both in that case.
-
-#### camera.s5eXXXX.so
-Located at `/vendor/lib64/hw/camera.s5eXXXX.so`. \
-Its name may vary depending your device, for example the Galaxy A54's lib is named `camera.s5e8835.so`.
-
-If the script fails to patch your lib, open an issue with your device model, Android version and attach the lib.
+If the script fails to patch your lib, open an issue with your device model and attach the lib(s).
 
 ## Usage, features & troubleshooting
 > [!WARNING]
-> Enabling or modifying something **doesn't mean it will work as expected** (it may even not do anything at all). It's up to you to test everything.
+> Enabling or modifying something **doesn't mean it will work as expected**. It's up to you to test everything. \
+> In any case, feel free to open an issue if you encounter any problem.
 
 <details>
 <summary><b>libexynoscamera3.so</b></summary>
@@ -141,6 +138,7 @@ Example: \
 * These are enabled by the lib if the Hardware Level is set **LEVEL_3**:
     * [**RAW**](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata#REQUEST_AVAILABLE_CAPABILITIES_RAW)
       * If disabled, GCam doesn't work and shows a black screen in photo mode. Enabling it should be enough to make it work
+      * Enabling this and spoofing some device model props may be enough to make Expert RAW work
     * **YUVReprocessing** ([YUV_REPROCESSING](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata#REQUEST_AVAILABLE_CAPABILITIES_YUV_REPROCESSING))
 * Others
     * **PrivateReprocessing** ([PRIVATE_REPROCESSING](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata#REQUEST_AVAILABLE_CAPABILITIES_PRIVATE_REPROCESSING))
@@ -164,7 +162,7 @@ Examples: \
 </details>
 
 ## GCam tests after enabling the RAW capability
-**Note:** If you test GCam on a device not listed here or you have any issue/weird behaviour, let me know.
+**Note:** If you test GCam on a device not listed here or get a different result, let me know.
 
 ### camera.s5eXXXX.so
 |SoC|Device Name|GCam Works?|Notes|
@@ -172,7 +170,7 @@ Examples: \
 |Exynos 1380 (S5E8835)|Galaxy A54|✓|Still testing|
 
 ### libexynoscamera3.so
-Most tests were done using [BSG's GCam 8.1](https://www.celsoazevedo.com/files/android/google-camera/dev-bsg/f/dl88/), as it seems to be the most stable one on Exynos devices that do have GCam working.
+Most tests were done using [BSG's GCam 8.1](https://www.celsoazevedo.com/files/android/google-camera/dev-bsg/f/dl88/), as it seems to be the most stable one.
 |SoC|Device Name|GCam Works?|Notes|
 |:-:|:-:|:-:|:---:|
 |Exynos 850|Galaxy A12 Nacho (A12s)|X|<table><th>Android 11</th><th>Android 13</th><tr><td>Freezes</td><td>Lags/freezes. Back cam doesn't save pics.<br/>Front cam only does sometimes</td></tr></table>|
@@ -190,5 +188,5 @@ Most tests were done using [BSG's GCam 8.1](https://www.celsoazevedo.com/files/a
 |Exynos 9611|Galaxy M31s|Partially|<table><th>Android 12</th><tr><td>Photos have pink tint. Changing black level doesn't help</td></tr></table>|
 |Exynos 9825|Galaxy F62|Partially|<table><th>Android 11</th><tr><td>Issues with the front camera</td></tr></table>|
 
-As you can see, GCam is usable on few devices that have the libexynoscamera3 lib. \
-As someone who had an A20, I can say that the difference in quality with the stock camera is huge. You can check it yourself with [this comparison](https://cdn.knightlab.com/libs/juxtapose/latest/embed/index.html?uid=9fea4384-35b8-11f0-bb24-0936e1cb08fb) of two pics I took.
+As you can see, GCam is unusable on most devices that use the libexynoscamera3 lib. \
+On the Exynos 7884/7904 series, the difference in pic quality between the stock camera and GCam is huge. Check it yourself with [this comparison](https://cdn.knightlab.com/libs/juxtapose/latest/embed/index.html?uid=9fea4384-35b8-11f0-bb24-0936e1cb08fb) of two pics I took with the Galaxy A20.
