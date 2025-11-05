@@ -30,7 +30,7 @@ class Capability(enum.IntEnum):
     ColorSpaceProfiles = 65536
 
 def capabilities_mod(lib: lief.ELF.Binary,
-                     enable_capabilities: list[int]
+                     enable_capabilities: list[int]|None = None
     ) -> Generator[tuple[int, bytes], None, None]:
     aarch64 = True
 
@@ -101,6 +101,8 @@ def capabilities_mod(lib: lief.ELF.Binary,
         empty_string_initialization += getValueStr_func.bytes(amount=4)
         sp_reservation = first_instructions[1]
         has_paciasp = True
+
+        print('[*] Lib has Pointer Authentication')
     else:
         sp_reservation = first_instructions[0]
 
@@ -137,6 +139,7 @@ def capabilities_mod(lib: lief.ELF.Binary,
     first_instructions: list[CsInsn] = list(init_func.instructions(amount=8))
     if first_instructions[0].mnemonic == 'bti':
         init_mov_ins = first_instructions[1]
+        print('[*] Lib has Branch Target Identification')
     else:
         init_mov_ins = first_instructions[0]
 
@@ -157,22 +160,23 @@ def capabilities_mod(lib: lief.ELF.Binary,
     exit_address = init_func.address + init_mov_ins.address + init_mov_ins.size
 
     # Enable capabilities (modify bitmask argument)
-    value = 0
-    for cap in enable_capabilities:
-        value |= cap
-    try:
-        mod.append(
-            asm(f'orr {bitmask_reg}, {bitmask_reg}, #{value}', aarch64)
-        )
-    except KsError:
-        # ORR doesn't support the immediate value, so store it in a register
-        mod.extend([
-            asm(f'mov {free_reg}, #{value}', aarch64),
-            asm(f'orr {bitmask_reg}, {bitmask_reg}, {free_reg}', aarch64)
-        ])
+    if enable_capabilities is not None:
+        value = 0
+        for cap in enable_capabilities:
+            value |= cap
+        try:
+            mod.append(
+                asm(f'orr {bitmask_reg}, {bitmask_reg}, #{value}', aarch64)
+            )
+        except KsError:
+            # ORR doesn't support the immediate value, so store it in a register
+            mod.extend([
+                asm(f'mov {free_reg}, #{value}', aarch64),
+                asm(f'orr {bitmask_reg}, {bitmask_reg}, {free_reg}', aarch64)
+            ])
 
-    caps = ', '.join([Capability(x).name + f' ({x})' for x in enable_capabilities])
-    print(f'- Enabling capabilities: {caps}')
+        caps = ', '.join([Capability(x).name + f' ({x})' for x in enable_capabilities])
+        print(f'- Enabling capabilities: {caps}')
 
     # Exit mod
     mod += mod_tail
