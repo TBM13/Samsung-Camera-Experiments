@@ -280,6 +280,11 @@ def main():
             abort('32-bit libs are not supported')
 
         print(f'\n[*] Patching "{file.name}"...')
+        if 'libexynoscamera3.so' in lib.libraries:
+            # Exynos 1280 devices include a camera.s5e8825.so lib
+            # that is a wrapper for libexynoscamera3.so
+            print(f'[!] The lib depends on libexynoscamera3.so, you may want to patch that one instead')
+
         for address, bytes in capabilities_mod(
             lib=lib,
             hw_level=args.hardware_level,
