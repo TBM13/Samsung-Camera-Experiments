@@ -29,10 +29,10 @@ def find_capabilities_and_hw_level_offsets(lib: lief.ELF.Binary) -> tuple[int, i
     func = Function.from_name_single(lib, '^_ZN7android29ExynosCameraMetadataConverter29m_createAvailableCapabilities.+')
     # We only care about the android_log_print that is at the start of the function,
     # since it logs "supportedHwLevel(%d) supportedCapabilities(0x%4ju)"
-    instructions = list(func.instructions(amount=120 if aarch64 else 70))
+    bytes = func.bytes(amount=120 if aarch64 else 70)
 
     expected_blocks = [
-        InstructionsBlockPattern('Generic (32-bit)', [
+        InstructionsBlockPattern('Generic (32-bit)', False, [
             # $0 = HW level/capabilities value register
             # $1 = ExynosCameraSensorInfo struct register
             # $2 = HW level/capabilities offset
@@ -45,7 +45,7 @@ def find_capabilities_and_hw_level_offsets(lib: lief.ELF.Binary) -> tuple[int, i
             ldr_pattern(aarch64, src_reg='pc'),
             ldr_pattern(aarch64, src_reg='pc'),
         ]),
-        InstructionsBlockPattern('Generic (64-bit)', [
+        InstructionsBlockPattern('Generic (64-bit)', True, [
             # $0 = HW level/capabilities value register
             # $1 = ExynosCameraSensorInfo struct register
             # $2 = HW level/capabilities offset
@@ -61,7 +61,7 @@ def find_capabilities_and_hw_level_offsets(lib: lief.ELF.Binary) -> tuple[int, i
         ]),
     ]
     print('[*] Finding hardware level & available capabilities offsets...')
-    matches = match_single_instruction_block(instructions, expected_blocks)
+    matches = match_single_instruction_block(bytes, expected_blocks)
     hw_offset =  int(matches[2], 16)
     cap_offset = int(matches[4], 16)
     print(hex(hw_offset), hex(cap_offset))

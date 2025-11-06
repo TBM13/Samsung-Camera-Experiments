@@ -171,9 +171,14 @@ cs_aarch64.detail = True
 ks_thumb = Ks(KS_ARCH_ARM, KS_MODE_THUMB | KS_MODE_LITTLE_ENDIAN)
 ks_aarch64 = Ks(KS_ARCH_ARM64, KS_MODE_LITTLE_ENDIAN)
 
-def disasm(instructions: bytes, aarch64: bool) -> Generator[CsInsn, None, None]:
+def disasm(instructions: bytes,
+           aarch64: bool) -> Generator[CsInsn, None, None]:
     cs = cs_aarch64 if aarch64 else cs_thumb
     return cs.disasm(instructions, 0x0)
+
+def disasm_lite(instructions: bytes, aarch64: bool):
+    cs = cs_aarch64 if aarch64 else cs_thumb
+    return cs.disasm_lite(instructions, 0x0)
 
 def asm(instructions: str|list[str], aarch64: bool) -> bytes:
     ks = ks_aarch64 if aarch64 else ks_thumb
@@ -345,12 +350,14 @@ class InstructionsBlockPattern:
     """Contains the patterns necessary to match 
     a consecutive block of instructions.
     """
-    def __init__(self, name: str, patterns: list[tuple[str, str]|None]):
-        self.patterns = patterns
+    def __init__(self, name: str, aarch64: bool,
+                 patterns: list[tuple[str, str]|None]):
         self.name = name
+        self.aarch64 = aarch64
+        self.patterns = patterns
 
 def _match_instruction_block(
-        instructions: list[CsInsn],
+        instructions: list[tuple[int, int, str, str]],
         block_pattern: InstructionsBlockPattern
 ) -> list[str]|None:
     patterns = block_pattern.patterns
@@ -366,14 +373,14 @@ def _match_instruction_block(
 
     first_mnemonic_pattern = patterns[0][0]
     first_op_pattern = patterns[0][1]
-    for i, ins in enumerate(instructions):
+    for i, (addr, size, mnemonic, op_str) in enumerate(instructions):
         if i + len(patterns) > len(instructions):
             # Not enough instructions left to match block
             return None
 
         matches = []
-        mnemonic_match = re.match(first_mnemonic_pattern, ins.mnemonic)
-        op_match = re.match(first_op_pattern, ins.op_str)
+        mnemonic_match = re.match(first_mnemonic_pattern, mnemonic)
+        op_match = re.match(first_op_pattern, op_str)
         if mnemonic_match is None or op_match is None:
             continue
 
@@ -401,9 +408,9 @@ def _match_instruction_block(
                 ins_pattern = ins_pattern.replace(f'${match_i}', matches[match_i])
                 op_pattern = op_pattern.replace(f'${match_i}', matches[match_i])
 
-            ins = instructions[i + j]
-            mnemonic_match = re.match(ins_pattern, ins.mnemonic)
-            op_match = re.match(op_pattern, ins.op_str)
+            addr, size, mnemonic, op_str = instructions[i + j]
+            mnemonic_match = re.match(ins_pattern, mnemonic)
+            op_match = re.match(op_pattern, op_str)
             if mnemonic_match is None or op_match is None:
                 break
 
@@ -417,7 +424,7 @@ def _match_instruction_block(
                 return matches
 
 def match_instruction_block(
-        instructions: list[CsInsn],
+        instructions: bytes,
         block_pattern: InstructionsBlockPattern
 ) -> list[str]|None:
     patterns = block_pattern.patterns
@@ -432,6 +439,7 @@ def match_instruction_block(
     none_indices = [i for i, x in enumerate(patterns) if x is None]
     tried = set()
 
+    instructions = list(disasm_lite(instructions, block_pattern.aarch64))
     for i in range(len(patterns) + 1):
         for none_pos in combinations(none_indices, i):
             pattern = patterns.copy()
@@ -443,13 +451,15 @@ def match_instruction_block(
                 tried.add(t)
                 matches = _match_instruction_block(
                     instructions, 
-                    InstructionsBlockPattern(block_pattern.name, pattern)
+                    InstructionsBlockPattern(
+                        block_pattern.name, block_pattern.aarch64, pattern
+                    )
                 )
                 if matches is not None:
                     return matches
 
 def match_single_instruction_block(
-        instructions: list[CsInsn],
+        instructions: bytes,
         blocks: list[InstructionsBlockPattern]
 ) -> list[str]:
     """Returns the first matching instruction block found."""
