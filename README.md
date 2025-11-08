@@ -1,7 +1,7 @@
 # Samsung Camera Experiments
 This repository contains two Python scripts that can patch the camera lib of Exynos devices and enable/modify different features:
 * `patch_libexynoscamera3.py` is for older Exynos devices that use the **libexynoscamera3.so** lib.
-  * Located at `/vendor/lib/libexynoscamera3.so` and/or `/vendor/lib64/libexynoscamera3.so`.
+  * Located at `/vendor/lib/` and/or `/vendor/lib64/`.
   * If both libs are present, I suggest patching the two of them
 * `patch_s5e.py` is for newer Exynos devices that use the **camera.s5eXXXX.so** lib.
   * Located at `/vendor/lib64/hw/`.
@@ -135,7 +135,7 @@ Example: \
     * **ManualSensor_ReadSensorSettings** ([MANUAL_SENSOR](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata#REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR) and [READ_SENSOR_SETTINGS](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata#REQUEST_AVAILABLE_CAPABILITIES_READ_SENSOR_SETTINGS))
     * **ManualPostProcessing** ([MANUAL_POST_PROCESSING](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata#REQUEST_AVAILABLE_CAPABILITIES_MANUAL_POST_PROCESSING))
     * **BurstCapture** ([BURST_CAPTURE](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata#REQUEST_AVAILABLE_CAPABILITIES_BURST_CAPTURE))
-* These are enabled by the lib if the Hardware Level is set **LEVEL_3**:
+* These are enabled by the lib if the Hardware Level is set to **LEVEL_3**:
     * [**RAW**](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata#REQUEST_AVAILABLE_CAPABILITIES_RAW)
       * If disabled, GCam doesn't work and shows a black screen in photo mode. Enabling it should be enough to make it work
       * Enabling this and spoofing some device model props may be enough to make Expert RAW work
