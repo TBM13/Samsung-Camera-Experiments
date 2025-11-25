@@ -167,7 +167,8 @@ Examples: \
 ### camera.s5eXXXX.so
 |SoC|Device Name|GCam Works?|Notes|
 |:-:|:-:|:-:|:---:|
-|Exynos 1380 (S5E8835)|Galaxy A54|✓|Still testing|
+|Exynos 1380 (S5E8835)|Galaxy A54|✓|Tested on Android 16|
+|Exynos 1480 (S5E8845)|Galaxy A55|✓|Tested on Android 15 using SGCAM 8.4 v25|
 
 ### libexynoscamera3.so
 Most tests were done using [BSG's GCam 8.1](https://www.celsoazevedo.com/files/android/google-camera/dev-bsg/f/dl88/), as it seems to be the most stable one.
