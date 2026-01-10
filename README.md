@@ -167,6 +167,7 @@ Examples: \
 ### camera.s5eXXXX.so
 |SoC|Device Name|GCam Works?|Notes|
 |:-:|:-:|:-:|:---:|
+|Exynos 1330 (S5E8535)|Galaxy M14|✓|Tested on Android 16 using SGCAM 8.4 v25|
 |Exynos 1380 (S5E8835)|Galaxy A54|✓|Tested on Android 16|
 |Exynos 1480 (S5E8845)|Galaxy A55|✓|Tested on Android 15 using SGCAM 8.4 v25|
 
