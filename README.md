@@ -184,11 +184,16 @@ Most tests were done using [BSG's GCam 8.1](https://www.celsoazevedo.com/files/a
 |Exynos 7904|Galaxy A30|✓|<table><th>Android 10</th><th>Android 11</th><tr><td>Freezes</td><td>HDR works; way better quality than stock cam.<br/>Very laggy, sometimes the phone reboots<br/>Front cam pics unusable due to bad resolution on few devices</td></tr></table>|
 |Exynos 7904|Galaxy A30s|?|<table><th>Android 10</th><th>Android 11</th><tr><td>Freezes</td><td>Not tested, might work considering other Exynos 7904 devices</td></tr></table>|
 |Exynos 7904|Galaxy A40|Partially|<table><th>Android 11</th><tr><td>Front cam pics unusable due to bad resolution.<br/>It's possible to fix, need to investigate how</td></tr></table>|
-|Exynos 9611|Galaxy A50s|Partially|<table><th>Android 11</th><tr><td>Photos have pink tint. Changing black level doesn't help</td></tr></table>|
-|Exynos 9611|Galaxy A51|Partially|<table><th>Android 11</th><tr><td>Photos have pink tint. Changing black level doesn't help</td></tr></table>|
-|Exynos 9611|Galaxy M31|Partially|<table><th>Android 11</th><tr><td>Photos have pink tint. Changing black level doesn't help</td></tr></table>|
-|Exynos 9611|Galaxy M31s|Partially|<table><th>Android 12</th><tr><td>Photos have pink tint. Changing black level doesn't help</td></tr></table>|
+|Exynos 9611|Galaxy A50s|Partially|<table><th>Android 11</th><tr><td>Photos have pink tint. Changing black level doesn't help*</td></tr></table>|
+|Exynos 9611|Galaxy A51|Partially|<table><th>Android 11</th><tr><td>Photos have pink tint. Changing black level doesn't help*</td></tr></table>|
+|Exynos 9611|Galaxy M21|Partially|<table><th>Android 11</th><tr><td>Photos have pink tint. Changing black level doesn't help*</td></tr></table>|
+|Exynos 9611|Galaxy M31|Partially|<table><th>Android 11</th><tr><td>Photos have pink tint. Changing black level doesn't help*</td></tr></table>|
+|Exynos 9611|Galaxy M31s|Partially|<table><th>Android 12</th><tr><td>Photos have pink tint. Changing black level doesn't help*</td></tr></table>|
 |Exynos 9825|Galaxy F62|Partially|<table><th>Android 11</th><tr><td>Issues with the front camera</td></tr></table>|
 
 As you can see, GCam is unusable on most devices that use the libexynoscamera3 lib. \
 On the Exynos 7884/7904 series, the difference in pic quality between the stock camera and GCam is huge. Check it yourself with [this comparison](https://cdn.knightlab.com/libs/juxtapose/latest/embed/index.html?uid=9fea4384-35b8-11f0-bb24-0936e1cb08fb) of two pics I took with the Galaxy A20.
+
+*On the phones with the pink tint issue, it's possible to make the DNG (raw pictures) usable by editing their metadata:
+* Set the black level pattern to 64 on all channels (R,G,B).
+* Set `AsShotNeutral` to 1 on all channels.
