@@ -186,7 +186,7 @@ Most tests were done using [BSG's GCam 8.1](https://www.celsoazevedo.com/files/a
 |Exynos 7904|Galaxy A40|Partially|<table><th>Android 11</th><tr><td>Front cam pics unusable due to bad resolution.<br/>It's possible to fix, need to investigate how</td></tr></table>|
 |Exynos 9611|Galaxy A50s|Partially|<table><th>Android 11</th><tr><td>Photos have pink tint. Changing black level doesn't help*</td></tr></table>|
 |Exynos 9611|Galaxy A51|Partially|<table><th>Android 11</th><tr><td>Photos have pink tint. Changing black level doesn't help*</td></tr></table>|
-|Exynos 9611|Galaxy M21|Partially|<table><th>Android 11</th><tr><td>Photos have pink tint. Changing black level doesn't help*</td></tr></table>|
+|Exynos 9611|Galaxy M21|Partially|<table><th>Android 12</th><tr><td>Photos have pink tint. Changing black level doesn't help*</td></tr></table>|
 |Exynos 9611|Galaxy M31|Partially|<table><th>Android 11</th><tr><td>Photos have pink tint. Changing black level doesn't help*</td></tr></table>|
 |Exynos 9611|Galaxy M31s|Partially|<table><th>Android 12</th><tr><td>Photos have pink tint. Changing black level doesn't help*</td></tr></table>|
 |Exynos 9825|Galaxy F62|Partially|<table><th>Android 11</th><tr><td>Issues with the front camera</td></tr></table>|
