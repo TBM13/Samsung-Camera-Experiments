@@ -7,9 +7,11 @@ import re
 from typing import Generator
 
 import lief
+
 from common.android_camera_metadata import SupportedHardwareLevel
-from common.utils import abort, create_magisk_module
 from common.patch_utils import *
+from common.utils import abort, create_magisk_module
+
 
 class Capability(enum.IntEnum):
     ManualSensor_ReadSensorSettings = 2
@@ -94,14 +96,19 @@ def createExynosCameraSensorInfo_mod(
     # Find createExynosCameraSensorInfo function
     aarch64 = lib.header.machine_type == lief.ELF.ARCH.AARCH64
     createExynosCameraSensorInfo = Function.from_name_single(
-        lib, r'^_ZN7android28createExynosCameraSensorInfo.+'
+        lib, r'^_ZN7android(28|29)createExynosCamera(3?)SensorInfo.+'
     )
-    print(f'[+] Found createExynosCameraSensorInfo function')
+    if 'createExynosCamera3SensorInfo' in createExynosCameraSensorInfo.name:
+        print('[+] Found createExynosCamera3SensorInfo function (legacy libexynoscamera3 lib)')
+        sensor_prefix = 'ExynosCamera3Sensor'
+    else:
+        print('[+] Found createExynosCameraSensorInfo function')
+        sensor_prefix = 'ExynosCameraSensor'
 
     # Recursively find all the used constructors, example:
     # createExynosCameraSensorInfo -> ExynosCameraSensorIMX754
     #   -> ExynosCameraSensorIMX754Base -> ExynosCameraSensorInfoBase
-    constructor_pattern = r'^_ZN7android\d\dExynosCameraSensor(.+?)(Base)?(C1|C2|C3).+'
+    constructor_pattern = fr'^_ZN7android\d\d{sensor_prefix}(.+?)(Base)?(C1|C2|C3).+'
     constructors = {
         f.name : f for f in Function.from_name(lib, constructor_pattern) 
     }
@@ -109,7 +116,7 @@ def createExynosCameraSensorInfo_mod(
     called_functions = [createExynosCameraSensorInfo]
     for f in called_functions:
         called_functions.extend(f.get_called_functions())
-        if not f.name in constructors:
+        if f.name not in constructors:
             continue
 
         cam_name = re.match(constructor_pattern, f.name).group(1)
@@ -125,8 +132,8 @@ def createExynosCameraSensorInfo_mod(
         abort('No used camera config constructors found')
     if len(constructors) == 0:
         abort('No unused camera config constructors found')
-    if not any('ExynosCameraSensorInfoBase' in f.name for f in called_functions):
-        abort('ExynosCameraSensorInfoBase constructor not called, this is unexpected')
+    if not any(f'{sensor_prefix}InfoBase' in f.name for f in called_functions):
+        abort(f'{sensor_prefix}InfoBase constructor not called, this is unexpected')
     unused_constructor = constructors.popitem()[1]
     print('[+] Selected unused constructor:', unused_constructor.name)
 
