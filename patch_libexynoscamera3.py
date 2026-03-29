@@ -11,6 +11,7 @@ logging.getLogger('angr').setLevel(logging.CRITICAL)
 
 from angr.knowledge_plugins.key_definitions.constants import OP_BEFORE
 from claripy.ast.bv import BV
+from keystone import KsError
 
 from common.android_camera_metadata import CameraMetadataTag, SupportedHardwareLevel
 from common.patch_utils import *
@@ -335,18 +336,21 @@ def create_ExynosCameraSensorInfo_mod(
     return_block: Block = lib.project.factory.block(return_node.addr, size=return_node.size)
     return_ins: CsInsn = return_block.capstone.insns[-1]
 
-    # Find struct offsets & build the instructions of the mod
+    # Find struct offsets & build the mod
     struct_offsets = find_struct_offsets(lib, [
         CameraMetadataTag.ANDROID_REQUEST_AVAILABLE_CAPABILITIES,
         CameraMetadataTag.ANDROID_INFO_SUPPORTED_HARDWARE_LEVEL
     ])
     cap_offset = struct_offsets[CameraMetadataTag.ANDROID_REQUEST_AVAILABLE_CAPABILITIES]
     hw_lvl_offset = struct_offsets[CameraMetadataTag.ANDROID_INFO_SUPPORTED_HARDWARE_LEVEL]
-    aarch64 = lib.is_aarch64
-    struct_reg = 'x0' if aarch64 else 'r0'
-    free_reg = 'w2' if aarch64 else 'r2'
-    free_reg2 = 'w3' if aarch64 else 'r3'
-    mod = bytearray()
+    struct_reg = 'x0' if lib.is_aarch64 else 'r0'
+    free_reg = 'w2' if lib.is_aarch64 else 'r2'
+    free_reg2 = 'w3' if lib.is_aarch64 else 'r3'
+    mod = Mod(
+        start_addr=VirtualAddress(unused_constructor.rebased_addr, True),
+        max_size=unused_constructor.size,
+        is_aarch64=lib.is_aarch64
+    )
 
     if (
         skip_depth_cameras or
@@ -354,19 +358,17 @@ def create_ExynosCameraSensorInfo_mod(
         disable_capabilities is not None
     ):
         # Read available capabilities
-        mod += asm(f'ldr {free_reg}, [{struct_reg}, #{cap_offset}]', aarch64)
+        mod.add_instruction(f'ldr {free_reg}, [{struct_reg}, #{cap_offset}]')
 
     # Skip cameras with depth output capability
     if skip_depth_cameras:
-        if aarch64:
-            # Skip next instruction (return) if depth output capability is not set
-            mod += asm(f'tbz {free_reg}, #{int(math.log2(Capability.DepthOutput))}, #8', aarch64)
-            mod += return_ins.bytes
+        if lib.is_aarch64:
+            mod.add_instruction(
+                f'tbnz {free_reg}, #{int(math.log2(Capability.DepthOutput))}, {mod.exit_label}'
+            )
         else:
-            mod += asm(f'tst {free_reg}, {Capability.DepthOutput}', aarch64)
-            # Skip next instruction (return) if depth output capability is not set
-            mod += asm(f'beq #{2 + return_ins.size}', aarch64)
-            mod += return_ins.bytes
+            mod.add_instruction(f'tst {free_reg}, {Capability.DepthOutput}')
+            mod.add_instruction(f'bne {mod.exit_label}')
 
         print('- Depth cameras won\'t be modified')
 
@@ -377,11 +379,11 @@ def create_ExynosCameraSensorInfo_mod(
             value |= cap.value
 
         try:
-            mod += asm(f'orr {free_reg}, {free_reg}, #{value}', aarch64)
+            mod.add_instruction(f'orr {free_reg}, {free_reg}, #{value}')
         except KsError:
             # ORR doesn't support the immediate value, so store it in a register
-            mod += asm(f'mov {free_reg2}, #{value}', aarch64)
-            mod += asm(f'orr {free_reg}, {free_reg}, {free_reg2}', aarch64)
+            mod.add_instruction(f'mov {free_reg2}, #{value}')
+            mod.add_instruction(f'orr {free_reg}, {free_reg}, {free_reg2}')
 
         caps = ', '.join([x.name for x in enable_capabilities])
         print(f'- Enabling capabilities: {caps}')
@@ -391,37 +393,33 @@ def create_ExynosCameraSensorInfo_mod(
             mask &= ~cap.value
 
         try:
-            mod += asm(f'and {free_reg}, {free_reg}, #{mask}', aarch64)
+            mod.add_instruction(f'and {free_reg}, {free_reg}, #{mask}')
         except KsError:
             # AND doesn't support the immediate value, so store it in a register
-            mod += asm(f'mov {free_reg2}, #{mask}', aarch64)
-            mod += asm(f'and {free_reg}, {free_reg}, {free_reg2}', aarch64)
+            mod.add_instruction(f'mov {free_reg2}, #{mask}')
+            mod.add_instruction(f'and {free_reg}, {free_reg}, {free_reg2}')
 
         caps = ', '.join([x.name for x in disable_capabilities])
         print(f'- Disabling capabilities: {caps}')
 
     # Save available capabilities
     if enable_capabilities is not None or disable_capabilities is not None:
-        mod += asm(f'str {free_reg}, [{struct_reg}, #{cap_offset}]', aarch64)
+        mod.add_instruction(f'str {free_reg}, [{struct_reg}, #{cap_offset}]')
 
     # Set hardware level
     if hw_level is not None:
-        mov = 'mov' if aarch64 else 'movs'
-        mod += asm(f'{mov} {free_reg}, #{hw_level.value}', aarch64)
-        mod += asm(f'strb {free_reg}, [{struct_reg}, #{hw_lvl_offset}]', aarch64) 
+        mov = 'mov' if lib.is_aarch64 else 'movs'
+        mod.add_instruction(f'{mov} {free_reg}, #{hw_level.value}')
+        mod.add_instruction(f'strb {free_reg}, [{struct_reg}, #{hw_lvl_offset}]') 
         print(f'- Changing hardware level to {hw_level.name}')
 
     # Replace the selected constructor's instructions with ours
-    mod += return_ins.bytes
-    if len(mod) > unused_constructor.size:
-        abort('The mod doesn\'t fit in the unused constructor')
-    unused_constructor_addr = VirtualAddress(unused_constructor.rebased_addr, True)
-    yield unused_constructor_addr, mod
+    mod.add_exit_instruction(return_ins.bytes)
+    yield mod.start_addr, mod.assemble(lib)
 
     # Replace createExynosCameraSensorInfo's return instruction with a branch to the mod
     ret_ins_addr = VirtualAddress(return_ins.address, True)
-    branch_offset = ret_ins_addr.calculate_offset(lib, unused_constructor_addr)
-    yield ret_ins_addr, asm(f'b #{branch_offset}', aarch64)
+    yield ret_ins_addr, mod.assemble_branch_to_mod(lib, ret_ins_addr)
 
 ########################################################################
 def parse_args() -> argparse.Namespace:

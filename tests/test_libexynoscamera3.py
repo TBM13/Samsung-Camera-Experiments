@@ -1,38 +1,24 @@
 import io
 import multiprocessing
 import sys
-import unittest
-import zipfile
-from typing import Any, Callable
 
 from common.android_camera_metadata import *
+from tests.common import *
 
 
-class Tee:
-    def __init__(self, *streams):
-        self.streams = streams
-
-    def write(self, data):
-        for s in self.streams:
-            s.write(data)
-            s.flush()
-
-    def flush(self):
-        for s in self.streams:
-            s.flush()
-
-class LibData:
+class LibData(BaseLibData):
     def __init__(
             self, path: str,
             hw_level_offset: int, capabilities_offset: int,
             return_ins_address: int,
             used_camera_names: list[str]
         ):
-        self.path = path
         self.hw_level_offset = hw_level_offset
         self.available_cap_offset = capabilities_offset
         self.return_ins_address = return_ins_address
         self.used_camera_names = used_camera_names
+
+        super().__init__(path)
 
 LIBS_DATA = [
     # Exynos 850
@@ -141,38 +127,8 @@ def create_ExynosCameraSensorInfo_mod(lib: bytes, queue: multiprocessing.Queue):
     unused_constructor_name = lib.find_symbol(unused_constructor_addr).name
     queue.put((lines, return_addr, unused_constructor_name))
 
-class TestLibexynoscamera3(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.zip = zipfile.ZipFile('tests/libexynoscamera3.zip', 'r')
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.zip.close()
-
-    def read_lib(self, path: str) -> bytes:
-        with self.zip.open(path) as f:
-            return f.read()
-        
-    def execute_test(
-            self, lib_data: LibData,
-            target: Callable[[bytes, multiprocessing.Queue], None]
-        ) -> Any:
-        """Executes the test in a separate process since angr never releases
-        the memory it uses.
-        """
-        print('###### ' + lib_data.path + ' ######', flush=True)
-        lib = self.read_lib(lib_data.path)
-
-        queue = multiprocessing.Queue()
-        p = multiprocessing.Process(
-            target=target, args=(lib, queue),
-
-        )
-        p.start()
-        p.join()
-
-        return queue.get()
+class TestLibexynoscamera3(LibTestCase):
+    zip_file_path = 'tests/libexynoscamera3.zip'
 
     def test_find_capabilities_and_hw_level_offsets(self):
         for lib_data in LIBS_DATA:
@@ -210,10 +166,10 @@ class TestLibexynoscamera3(unittest.TestCase):
 
             # Check that all used camera constructors were detected
             constructor_call_lines = [
-                line for line in lines if line.startswith('- Constructor for')
+                line for line in lines if line.startswith('   + Constructor for')
             ]
             for cam_name in lib_data.used_camera_names:
-                self.assertIn(f'- Constructor for {cam_name} is called', constructor_call_lines)
+                self.assertIn(f'   + Constructor for {cam_name} is called', constructor_call_lines)
             self.assertEqual(len(constructor_call_lines), len(lib_data.used_camera_names))
 
             # Check return instruction address
