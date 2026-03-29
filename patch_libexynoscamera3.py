@@ -1,16 +1,20 @@
 #!/usr/bin/python3
 import argparse
 import enum
+import logging
 import math
 import os
 import re
-from typing import Generator
 
-import lief
+# angr prints an error when it's imported and unicorn engine is not installed
+logging.getLogger('angr').setLevel(logging.CRITICAL)
 
-from common.android_camera_metadata import SupportedHardwareLevel
+from angr.knowledge_plugins.key_definitions.constants import OP_BEFORE
+from claripy.ast.bv import BV
+
+from common.android_camera_metadata import CameraMetadataTag, SupportedHardwareLevel
 from common.patch_utils import *
-from common.utils import abort, create_magisk_module
+from common.utils import abort, create_magisk_module, warn
 
 
 class Capability(enum.IntEnum):
@@ -26,12 +30,21 @@ class Capability(enum.IntEnum):
     LogicalMultiCamera = 1024
     SecureImageData = 2048
 
-def find_capabilities_and_hw_level_offsets(lib: lief.ELF.Binary) -> tuple[int, int]:
-    aarch64 = lib.header.machine_type == lief.ELF.ARCH.AARCH64
-    func = Function.from_name_single(lib, '^_ZN7android29ExynosCameraMetadataConverter29m_createAvailableCapabilities.+')
-    # We only care about the android_log_print that is at the start of the function,
-    # since it logs "supportedHwLevel(%d) supportedCapabilities(0x%4ju)"
-    bytes = func.bytes(amount=120 if aarch64 else 70)
+def _find_capabilities_and_hwlevel_offsets(lib: Lib) -> dict[CameraMetadataTag, int]:
+    aarch64 = lib.is_aarch64
+    func = lib.find_symbol(
+        r'^_ZN7android\d\dExynosCamera3?MetadataConverter29m_createAvailableCapabilities.+'
+    )
+    if func is None:
+        warn('Failed to find m_createAvailableCapabilities function. This is normal on older libexynoscamera3 libs')
+        return {}
+    
+    # The first arg of the function contains the camera config struct.
+    # At the start there is an android_log_print call that logs the
+    # hw level and the capabilities. We can grab the offsets there.
+    block: Block = lib.project.factory.block(
+        func.rebased_addr, size=min(func.size, 120 if aarch64 else 70)
+    )
 
     expected_blocks = [
         InstructionsBlockPattern('Generic (32-bit)', False, [
@@ -62,27 +75,182 @@ def find_capabilities_and_hw_level_offsets(lib: lief.ELF.Binary) -> tuple[int, i
             branch_pattern(aarch64),
         ]),
     ]
+
     print('[*] Finding hardware level & available capabilities offsets...')
-    matches = match_single_instruction_block(bytes, expected_blocks)
+    matches = match_single_instruction_block(block.bytes, expected_blocks)
     hw_offset =  int(matches[2], 16)
     cap_offset = int(matches[4], 16)
     print(hex(hw_offset), hex(cap_offset))
 
+    if hw_offset <= 0 or hw_offset >= 0x1000:
+        abort(f'Invalid hardware level offset: {hex(hw_offset)}')
+    if cap_offset <= 0 or cap_offset >= 0x1000:
+        abort(f'Invalid capabilities offset: {hex(cap_offset)}')
     # Both offsets are usually close to each other
     if abs(cap_offset - hw_offset) > 8:
-        print('\033[33m[w] Big difference between offsets, one or both may be wrong\033[0m')
+        warn('Abnormal offset difference, one or both may be wrong')
     if hw_offset == cap_offset:
         abort('Both offsets have the same value')
 
-    return cap_offset, hw_offset
+    return {
+        CameraMetadataTag.ANDROID_INFO_SUPPORTED_HARDWARE_LEVEL: hw_offset,
+        CameraMetadataTag.ANDROID_REQUEST_AVAILABLE_CAPABILITIES: cap_offset
+    }
 
-def createExynosCameraSensorInfo_mod(
-        lib: lief.ELF.Binary,
+def find_struct_offsets(lib: Lib, tags: list[CameraMetadataTag]) -> dict[CameraMetadataTag, int]:
+    tag_offsets: dict[CameraMetadataTag, int] = {}
+
+    # On modern libexynoscamera3 libs we can get these two offsets directly
+    # in ExynosCameraMetadataConverter::m_createAvailableCapabilities.
+    # It's quicker and also we can't get the capabilities offset
+    # in constructStaticInfo on these newer libs
+    if (CameraMetadataTag.ANDROID_INFO_SUPPORTED_HARDWARE_LEVEL in tags
+        or CameraMetadataTag.ANDROID_REQUEST_AVAILABLE_CAPABILITIES in tags):
+        tag_offsets.update(
+            _find_capabilities_and_hwlevel_offsets(lib)
+        )
+
+        # Return early if we found all the requested offsets
+        if all(tag in tag_offsets for tag in tags):
+            return tag_offsets
+    
+    construct_static_info = lib.find_symbol(
+        r'^_ZN7android\d\dExynosCamera3?MetadataConverter19constructStaticInfo.+'
+    )
+    if construct_static_info is None:
+        abort('Failed to find constructStaticInfo function')
+
+    print('[+] Found constructStaticInfo function, analyzing...')
+    cfg = lib.project.analyses.CFGFast(
+        normalize=True,
+
+        # Only scan constructStaticInfo and all the functions it calls
+        function_starts=[construct_static_info.rebased_addr],
+        start_at_entry=False,
+        force_complete_scan=False,
+        force_smart_scan=False,
+        function_prologues=False,
+        symbols=False,
+
+        # Optimizations
+        data_references=False,
+    )
+
+    # constructStaticInfo is filled with calls to CameraMetadata::update.
+    # The second arg of these calls is the camera metadata tag and the third
+    # arg is the value for that metadata.
+    func = cfg.functions[construct_static_info.rebased_addr]
+    # Find all the CameraMetadata::update calls
+    update_calls: list[int] = list(
+        ins.address for ins, f in get_called_functions(lib, func) if 'CameraMetadata6update' in f.name
+    )
+    if len(update_calls) == 0:
+        abort('No CameraMetadata::update calls found')
+    print(f'   + Found {len(update_calls)} CameraMetadata::update calls')
+
+    # Lets find the values of r1 and r2 at each CameraMetadata::update call
+    obs_points = [('insn', addr, OP_BEFORE) for addr in update_calls]
+    rda = lib.project.analyses.ReachingDefinitions(
+        subject=func,
+        observation_points=obs_points,
+
+        # Optimizations
+        track_tmps=False,
+        track_consts=False,
+        track_liveness=False,
+        max_iterations=2,
+        dep_graph=None,
+    )
+
+    r1_offset, r1_size = lib.project.arch.registers['r1']
+    r2_offset, r2_size = lib.project.arch.registers['r2']
+
+    for call_addr in update_calls:
+        defs = rda.get_reaching_definitions_by_insn(call_addr, OP_BEFORE)
+
+        r1_values: list[tuple[int, set[BV]]] = list(defs.registers.load(r1_offset, r1_size).items())
+        r2_values: list[tuple[int, set[BV]]] = list(defs.registers.load(r2_offset, r2_size).items())
+        if len(r1_values) != 1 or len(r2_values) != 1:
+            warn('Failed to resolve the arguments of a CameraMetadata::update call')
+            continue
+
+        r1_value = r1_values[0][1]
+        r2_value = r2_values[0][1]
+        if len(r1_value) != 1 or len(r2_value) != 1:
+            warn('Failed to resolve the arguments of a CameraMetadata::update call')
+            continue
+
+        r1_value = r1_value.pop()
+        r2_value = r2_value.pop()
+        if r1_value.symbolic:
+            warn(f'Failed to resolve camera metadata tag: {r1_value} {r2_value}')
+            continue
+
+        tag = r1_value.concrete_value
+        if r2_value.concrete:
+            offset = r2_value.concrete_value
+            if offset <= 0:
+                # The register likely contains a manipulated value
+                # instead of something directly read from the struct
+                continue
+        else:
+            r2_definitions = list(defs.extract_defs(r2_value))
+            if len(r2_definitions) == 0:
+                warn(f'Failed to find the definition of {r2_value} for tag {tag}')
+                continue
+
+            offset_candidates: set[int] = set()
+            for definition in r2_definitions:
+                def_ins_addr = definition.codeloc.ins_addr
+                def_block = lib.project.factory.block(def_ins_addr, num_inst=1)
+                def_insn = def_block.capstone.insns[0]
+                offset = get_offset_from_symbolic_ast(
+                    r2_value, lib.is_aarch64, def_insn
+                )
+                if offset is None: continue
+                if offset is not None and offset <= 0:
+                    # The register likely contains a manipulated value
+                    # instead of something directly read from the struct
+                    continue
+
+                offset_candidates.add(offset)
+
+            if len(offset_candidates) == 0:
+                continue
+            if len(offset_candidates) == 1:
+                offset = offset_candidates.pop()
+            elif len(offset_candidates) > 1:
+                warn(f'Multiple offset candidates found for tag {tag}: {offset_candidates}')
+                continue
+
+        if tag in CameraMetadataTag:
+            tag = CameraMetadataTag(tag)
+            if tag in tag_offsets:
+                if tag_offsets[tag] != offset:
+                    abort(f'Multiple offsets found for {tag.name}: {hex(tag_offsets[tag])} and {hex(offset)}')
+                
+                continue
+            
+            if offset in tag_offsets.values():
+                abort(f'Multiple tags have the same struct offset {hex(offset)}')
+            if offset <= 0 or offset >= 0x1000:
+                abort(f'The offset of {tag.name} is not valid: {hex(offset)}')
+
+            tag_offsets[tag] = offset
+            print(f'   + Found {tag.name} offset: {hex(offset)}')
+
+    if not all(tag in tag_offsets for tag in tags):
+        abort(f'Failed to find the struct offset of {tag.name}')
+
+    return tag_offsets
+
+def create_ExynosCameraSensorInfo_mod(
+        lib: Lib,
         enable_capabilities: list[Capability]|None = None,
         disable_capabilities: list[Capability]|None = None,
         hw_level: SupportedHardwareLevel|None = None,
         skip_depth_cameras: bool = False
-    ) -> Generator[tuple[int, bytes], None, None]:
+    ):
     # Camera configs are created on 'createExynosCameraSensorInfo'.
     # The function calls different camera config struct constructors
     # (e.g. 'ExynosCameraSensorIMX754') depending on the camera,
@@ -94,63 +262,91 @@ def createExynosCameraSensorInfo_mod(
     # instructions and branch to it at the end of 'createExynosCameraSensorInfo'.
 
     # Find createExynosCameraSensorInfo function
-    aarch64 = lib.header.machine_type == lief.ELF.ARCH.AARCH64
-    createExynosCameraSensorInfo = Function.from_name_single(
-        lib, r'^_ZN7android(28|29)createExynosCamera(3?)SensorInfo.+'
+    createExynosCameraSensorInfo = lib.find_symbol(
+        r'^_ZN7android\d\dcreateExynosCamera3?SensorInfo.+'
     )
+    if createExynosCameraSensorInfo is None:
+        abort('Failed to find createExynosCameraSensorInfo function')
     if 'createExynosCamera3SensorInfo' in createExynosCameraSensorInfo.name:
-        print('[+] Found createExynosCamera3SensorInfo function (legacy libexynoscamera3 lib)')
+        print('[+] Found createExynosCamera3SensorInfo function (legacy libexynoscamera3 lib), analyzing...')
         sensor_prefix = 'ExynosCamera3Sensor'
     else:
-        print('[+] Found createExynosCameraSensorInfo function')
+        print('[+] Found createExynosCameraSensorInfo function, analyzing...')
         sensor_prefix = 'ExynosCameraSensor'
+
+    cfg = lib.project.analyses.CFGFast(
+        normalize=True,
+
+        # Only scan createExynosCameraSensorInfo and all the functions it calls
+        function_starts=[createExynosCameraSensorInfo.rebased_addr],
+        start_at_entry=False,
+        force_complete_scan=False,
+        force_smart_scan=False,
+        function_prologues=False,
+        symbols=False,
+
+        # Optimizations
+        data_references=False,
+    )
+    createExynosCameraSensorInfo = cfg.functions[createExynosCameraSensorInfo.rebased_addr]
 
     # Recursively find all the used constructors, example:
     # createExynosCameraSensorInfo -> ExynosCameraSensorIMX754
     #   -> ExynosCameraSensorIMX754Base -> ExynosCameraSensorInfoBase
     constructor_pattern = fr'^_ZN7android\d\d{sensor_prefix}(.+?)(Base)?(C1|C2|C3).+'
     constructors = {
-        f.name : f for f in Function.from_name(lib, constructor_pattern) 
+        f.name : f for f in lib.find_symbols(constructor_pattern) 
     }
-    cam_names = set()
+    used_cam_names: set[str] = set()
     called_functions = [createExynosCameraSensorInfo]
     for f in called_functions:
-        called_functions.extend(f.get_called_functions())
-        if f.name not in constructors:
-            continue
+        called_functions.extend(
+            func for _, func in get_called_functions(lib, f) if func not in called_functions
+        )
 
-        cam_name = re.match(constructor_pattern, f.name).group(1)
-        if cam_name not in cam_names:
+        if f.name in constructors:
+            cam_name = re.match(constructor_pattern, f.name).group(1)
+            if cam_name in used_cam_names:
+                continue
+
             if cam_name != 'Info':
-                print(f'- Constructor for {cam_name} is called')
+                print(f'   + Constructor for {cam_name} is called')
+            used_cam_names.add(cam_name)
 
-            cam_names.add(cam_name)
+            # On some libs a base constructor might be called (e.g. IMX754Base)
+            # but not the normal constructor (IMX754). Lets remove both just in case.
+            for cons_name in list(constructors.keys()):
+                if cam_name.upper() in cons_name.upper():
+                    constructors.pop(cons_name)
 
-        constructors.pop(f.name)
-
-    if len(cam_names) == 0:
+    if not any(f'{sensor_prefix}InfoBase' in f.name for f in called_functions):
+        abort(f'{sensor_prefix}InfoBase constructor not called, this is unexpected')
+    if len(used_cam_names) == 0:
         abort('No used camera config constructors found')
     if len(constructors) == 0:
         abort('No unused camera config constructors found')
-    if not any(f'{sensor_prefix}InfoBase' in f.name for f in called_functions):
-        abort(f'{sensor_prefix}InfoBase constructor not called, this is unexpected')
     unused_constructor = constructors.popitem()[1]
     print('[+] Selected unused constructor:', unused_constructor.name)
 
     # Find createExynosCameraSensorInfo's return instruction
-    return_ins = list(createExynosCameraSensorInfo.get_return_instructions())
-    if len(return_ins) == 0:
-        abort('Failed to find return instruction of "createExynosCameraSensorInfo"')
-    elif len(return_ins) > 1:
-        abort('Multiple return instructions found in "createExynosCameraSensorInfo"')
-    return_ins = return_ins[-1]
+    if len(createExynosCameraSensorInfo.ret_sites) != 1:
+        abort('Zero or multiple return sites found')
+    return_node = createExynosCameraSensorInfo.ret_sites[0]
+    return_block: Block = lib.project.factory.block(return_node.addr, size=return_node.size)
+    return_ins: CsInsn = return_block.capstone.insns[-1]
 
     # Find struct offsets & build the instructions of the mod
-    available_cap_offset, hw_lvl_offset = find_capabilities_and_hw_level_offsets(lib)
+    struct_offsets = find_struct_offsets(lib, [
+        CameraMetadataTag.ANDROID_REQUEST_AVAILABLE_CAPABILITIES,
+        CameraMetadataTag.ANDROID_INFO_SUPPORTED_HARDWARE_LEVEL
+    ])
+    cap_offset = struct_offsets[CameraMetadataTag.ANDROID_REQUEST_AVAILABLE_CAPABILITIES]
+    hw_lvl_offset = struct_offsets[CameraMetadataTag.ANDROID_INFO_SUPPORTED_HARDWARE_LEVEL]
+    aarch64 = lib.is_aarch64
     struct_reg = 'x0' if aarch64 else 'r0'
     free_reg = 'w2' if aarch64 else 'r2'
     free_reg2 = 'w3' if aarch64 else 'r3'
-    mod: list[bytes] = []
+    mod = bytearray()
 
     if (
         skip_depth_cameras or
@@ -158,25 +354,20 @@ def createExynosCameraSensorInfo_mod(
         disable_capabilities is not None
     ):
         # Read available capabilities
-        mod.extend([
-            asm(f'ldr {free_reg}, [{struct_reg}, #{available_cap_offset}]', aarch64)
-        ])
+        mod += asm(f'ldr {free_reg}, [{struct_reg}, #{cap_offset}]', aarch64)
 
     # Skip cameras with depth output capability
     if skip_depth_cameras:
         if aarch64:
-            mod.extend([
-                # Skip next instruction (return) if depth output capability is not set
-                asm(f'tbz {free_reg}, #{int(math.log2(Capability.DepthOutput))}, #8', aarch64),
-                return_ins.bytes
-            ])
+            # Skip next instruction (return) if depth output capability is not set
+            mod += asm(f'tbz {free_reg}, #{int(math.log2(Capability.DepthOutput))}, #8', aarch64)
+            mod += return_ins.bytes
         else:
-            mod.extend([
-                asm(f'tst {free_reg}, {Capability.DepthOutput}', aarch64),
-                # Skip next instruction (return) if depth output capability is not set
-                asm(f'beq #{2 + return_ins.size}', aarch64),
-                return_ins.bytes
-            ])
+            mod += asm(f'tst {free_reg}, {Capability.DepthOutput}', aarch64)
+            # Skip next instruction (return) if depth output capability is not set
+            mod += asm(f'beq #{2 + return_ins.size}', aarch64)
+            mod += return_ins.bytes
+
         print('- Depth cameras won\'t be modified')
 
     # Modify available capabilities value
@@ -186,15 +377,11 @@ def createExynosCameraSensorInfo_mod(
             value |= cap.value
 
         try:
-            mod.append(
-                asm(f'orr {free_reg}, {free_reg}, #{value}', aarch64)
-            )
+            mod += asm(f'orr {free_reg}, {free_reg}, #{value}', aarch64)
         except KsError:
             # ORR doesn't support the immediate value, so store it in a register
-            mod.extend([
-                asm(f'mov {free_reg2}, #{value}', aarch64),
-                asm(f'orr {free_reg}, {free_reg}, {free_reg2}', aarch64)
-            ])
+            mod += asm(f'mov {free_reg2}, #{value}', aarch64)
+            mod += asm(f'orr {free_reg}, {free_reg}, {free_reg2}', aarch64)
 
         caps = ', '.join([x.name for x in enable_capabilities])
         print(f'- Enabling capabilities: {caps}')
@@ -204,45 +391,37 @@ def createExynosCameraSensorInfo_mod(
             mask &= ~cap.value
 
         try:
-            mod.append(
-                asm(f'and {free_reg}, {free_reg}, #{mask}', aarch64)
-            )
+            mod += asm(f'and {free_reg}, {free_reg}, #{mask}', aarch64)
         except KsError:
             # AND doesn't support the immediate value, so store it in a register
-            mod.extend([
-                asm(f'mov {free_reg2}, #{mask}', aarch64),
-                asm(f'and {free_reg}, {free_reg}, {free_reg2}', aarch64)
-            ])
+            mod += asm(f'mov {free_reg2}, #{mask}', aarch64)
+            mod += asm(f'and {free_reg}, {free_reg}, {free_reg2}', aarch64)
 
         caps = ', '.join([x.name for x in disable_capabilities])
         print(f'- Disabling capabilities: {caps}')
 
     # Save available capabilities
     if enable_capabilities is not None or disable_capabilities is not None:
-        mod.append(
-            asm(f'str {free_reg}, [{struct_reg}, #{available_cap_offset}]', aarch64)
-        )
+        mod += asm(f'str {free_reg}, [{struct_reg}, #{cap_offset}]', aarch64)
 
     # Set hardware level
     if hw_level is not None:
         mov = 'mov' if aarch64 else 'movs'
-        mod.extend([
-            asm(f'{mov} {free_reg}, #{hw_level.value}', aarch64),
-            asm(f'strb {free_reg}, [{struct_reg}, #{hw_lvl_offset}]', aarch64)  
-        ])
+        mod += asm(f'{mov} {free_reg}, #{hw_level.value}', aarch64)
+        mod += asm(f'strb {free_reg}, [{struct_reg}, #{hw_lvl_offset}]', aarch64) 
         print(f'- Changing hardware level to {hw_level.name}')
 
     # Replace the selected constructor's instructions with ours
-    mod.append(return_ins.bytes)
-    mod = b''.join(mod)
+    mod += return_ins.bytes
     if len(mod) > unused_constructor.size:
         abort('The mod doesn\'t fit in the unused constructor')
-    yield unused_constructor.address, mod
+    unused_constructor_addr = VirtualAddress(unused_constructor.rebased_addr, True)
+    yield unused_constructor_addr, mod
 
     # Replace createExynosCameraSensorInfo's return instruction with a branch to the mod
-    branch_offset = unused_constructor.address - (createExynosCameraSensorInfo.address + return_ins.address)
-    return_ins_address = createExynosCameraSensorInfo.address + return_ins.address
-    yield return_ins_address, asm(f'b #{branch_offset}', aarch64)
+    ret_ins_addr = VirtualAddress(return_ins.address, True)
+    branch_offset = ret_ins_addr.calculate_offset(lib, unused_constructor_addr)
+    yield ret_ins_addr, asm(f'b #{branch_offset}', aarch64)
 
 ########################################################################
 def parse_args() -> argparse.Namespace:
@@ -321,31 +500,22 @@ def main():
 
     out_libs: list[str] = []
     for file in args.libs:
-        base, _ = os.path.splitext(file.name)
-        output_path = f'{base}_patched.so'
-
-        lib_data = bytearray(file.read())
-        original_len = len(lib_data)
-        lib = lief.parse(file.name)
+        lib = Lib(file.read())
         file.close()
 
-        if lib is None:
-            abort(f'Failed to parse "{file.name}" as an ELF binary')
-
         print(f'\n[*] Patching "{file.name}"...')
-        for address, bytes in createExynosCameraSensorInfo_mod(
+        for address, patch_bytes in create_ExynosCameraSensorInfo_mod(
             lib=lib,
             enable_capabilities=args.enable_cap,
             disable_capabilities=args.disable_cap,
             hw_level=args.hardware_level,
             skip_depth_cameras=args.skip_depth
         ):
-            apply_patch(lib_data, lib, address, bytes)
+            lib.apply_patch(address, patch_bytes)
 
-        if len(lib_data) != original_len:
-            abort('The size of the patched lib was modified')
-        with open(output_path, 'wb') as out_file:
-            out_file.write(lib_data)
+        base, _ = os.path.splitext(file.name)
+        output_path = f'{base}_patched.so'
+        lib.write_to_file(output_path)
 
         print(f'[+] Patched lib saved as "{output_path}"')
         out_libs.append(output_path)
@@ -358,9 +528,9 @@ def main():
     ):
         mods = []
         if args.enable_cap is not None:
-            mods.append(f'enables ' + ', '.join([x.name for x in args.enable_cap]))
+            mods.append('enables ' + ', '.join([x.name for x in args.enable_cap]))
         if args.disable_cap is not None:
-            mods.append(f'disables ' + ', '.join([x.name for x in args.disable_cap]))
+            mods.append('disables ' + ', '.join([x.name for x in args.disable_cap]))
         if args.hardware_level is not None:
             mods.append(f'sets hardware level to {args.hardware_level.name}')
 

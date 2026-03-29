@@ -1,12 +1,25 @@
-import unittest
 import io
+import multiprocessing
+import sys
+import unittest
 import zipfile
-from unittest.mock import patch
+from typing import Any, Callable
 
-import lief
+from common.android_camera_metadata import *
 
-from patch_libexynoscamera3 import *
 
+class Tee:
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, data):
+        for s in self.streams:
+            s.write(data)
+            s.flush()
+
+    def flush(self):
+        for s in self.streams:
+            s.flush()
 
 class LibData:
     def __init__(
@@ -91,44 +104,109 @@ LIBS_DATA = [
     LibData("note10plus5g_s.so", 0x900, 0x908, 0xB19FE, ["IMX516", "IMX316", "3M5", "2L4", "3J1", "3P9"])
 ]
 
+def find_capabilities_and_hwlevel_offsets(lib: bytes, queue: multiprocessing.Queue):
+    import common.patch_utils as putils
+    import patch_libexynoscamera3 as pcam3
+    # Ensure that prints from this process are flushed immediately
+    sys.stdout.reconfigure(line_buffering=True)
+
+    lib = putils.Lib(lib)
+    res = pcam3._find_capabilities_and_hwlevel_offsets(lib)
+    queue.put(res)
+
+def find_struct_offsets(lib: bytes, queue: multiprocessing.Queue):
+    import common.patch_utils as putils
+    import patch_libexynoscamera3 as pcam3
+    # Ensure that prints from this process are flushed immediately
+    sys.stdout.reconfigure(line_buffering=True)
+
+    lib = putils.Lib(lib)
+    res = pcam3.find_struct_offsets(lib, tags=list(CameraMetadataTag))
+    queue.put(res)
+
+def create_ExynosCameraSensorInfo_mod(lib: bytes, queue: multiprocessing.Queue):
+    import common.patch_utils as putils
+    import patch_libexynoscamera3 as pcam3
+
+    stdout_buffer = io.StringIO()
+    sys.stdout = Tee(sys.stdout, stdout_buffer)
+
+    lib: putils.Lib = putils.Lib(lib)
+    mod = list(pcam3.create_ExynosCameraSensorInfo_mod(lib))
+    unused_constructor_addr, _ = mod[0]
+    return_addr, _ = mod[1]
+
+    lines = stdout_buffer.getvalue().splitlines()
+    return_addr = return_addr.linked_addr(lib)
+    unused_constructor_name = lib.find_symbol(unused_constructor_addr).name
+    queue.put((lines, return_addr, unused_constructor_name))
+
 class TestLibexynoscamera3(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.zip = zipfile.ZipFile('tests/libexynoscamera3.zip', 'r')
-        cls._cache = {}
 
     @classmethod
     def tearDownClass(cls):
         cls.zip.close()
 
-    def get_lib(self, path: str) -> lief.ELF.Binary:
-        if path not in self._cache:
-            with self.zip.open(path) as f:
-                self._cache[path] = lief.parse(f.read())
+    def read_lib(self, path: str) -> bytes:
+        with self.zip.open(path) as f:
+            return f.read()
+        
+    def execute_test(
+            self, lib_data: LibData,
+            target: Callable[[bytes, multiprocessing.Queue], None]
+        ) -> Any:
+        """Executes the test in a separate process since angr never releases
+        the memory it uses.
+        """
+        print('###### ' + lib_data.path + ' ######', flush=True)
+        lib = self.read_lib(lib_data.path)
 
-        return self._cache[path]
+        queue = multiprocessing.Queue()
+        p = multiprocessing.Process(
+            target=target, args=(lib, queue),
+
+        )
+        p.start()
+        p.join()
+
+        return queue.get()
 
     def test_find_capabilities_and_hw_level_offsets(self):
         for lib_data in LIBS_DATA:
-            print('#### ' + lib_data.path + ' ####')
-
-            lib = self.get_lib(lib_data.path)
-            self.assertEqual(
-                find_capabilities_and_hw_level_offsets(lib),
-                (lib_data.available_cap_offset, lib_data.hw_level_offset)
+            res: dict[CameraMetadataTag, int] = self.execute_test(
+                lib_data, find_capabilities_and_hwlevel_offsets
             )
+
+            self.assertEqual(
+                res,
+                {
+                    CameraMetadataTag.ANDROID_REQUEST_AVAILABLE_CAPABILITIES: lib_data.available_cap_offset,
+                    CameraMetadataTag.ANDROID_INFO_SUPPORTED_HARDWARE_LEVEL: lib_data.hw_level_offset
+                }
+            )
+
+    def test_find_struct_offsets(self):
+        for lib_data in LIBS_DATA:
+            res: dict[CameraMetadataTag, int] = self.execute_test(
+                lib_data, find_struct_offsets
+            )
+
+            # Check that all tags were found
+            for tag in CameraMetadataTag:
+                self.assertIn(tag, res)
+
+            # Ensure capabilities and hw level offsets are correct
+            self.assertEqual(res[CameraMetadataTag.ANDROID_REQUEST_AVAILABLE_CAPABILITIES], lib_data.available_cap_offset)
+            self.assertEqual(res[CameraMetadataTag.ANDROID_INFO_SUPPORTED_HARDWARE_LEVEL], lib_data.hw_level_offset)
 
     def test_sensor_info_struct_mod(self):
         for lib_data in LIBS_DATA:
-            print('#### ' + lib_data.path + ' ####')
-
-            lib = self.get_lib(lib_data.path)
-            with patch('sys.stdout', new_callable=io.StringIO) as mock_stdout:
-                mod = list(createExynosCameraSensorInfo_mod(lib))
-                out = mock_stdout.getvalue()
-                lines = out.splitlines()
-
-            print(out)
+            lines, return_addr, unused_constructor_name = self.execute_test(
+                lib_data, create_ExynosCameraSensorInfo_mod
+            )
 
             # Check that all used camera constructors were detected
             constructor_call_lines = [
@@ -138,16 +216,11 @@ class TestLibexynoscamera3(unittest.TestCase):
                 self.assertIn(f'- Constructor for {cam_name} is called', constructor_call_lines)
             self.assertEqual(len(constructor_call_lines), len(lib_data.used_camera_names))
 
-            unused_constructor_addr, _ = mod[0]
-            return_addr, _ = mod[1]
-
             # Check return instruction address
             self.assertEqual(return_addr, lib_data.return_ins_address)
-            constructor = Function.from_address(lib, unused_constructor_addr)
-            self.assertNotEqual(constructor, None)
 
             # Check that the selected constructor isn't one of the used
-            cons_name = constructor.name.upper()
+            cons_name = unused_constructor_name.upper()
             self.assertNotIn("INFOBASE", cons_name)
             for cam_name in lib_data.used_camera_names:
                 self.assertNotIn(cam_name.upper(), cons_name)

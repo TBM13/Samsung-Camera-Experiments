@@ -1,180 +1,300 @@
+import atexit
+import gc
+import io
+import logging
+import os
+import pathlib
 import re
+import shutil
+import time
 from itertools import combinations
-from typing import Generator
+from typing import Generator, Self, overload
 
-import lief
+# angr prints an error when it's imported and unicorn engine is not installed
+logging.getLogger('angr').setLevel(logging.CRITICAL)
+
+import angr
+import archinfo
+from angr import Block
+from angr.knowledge_plugins import Function
 from capstone import *
+from capstone.arm import ARM_OP_MEM
+from capstone.arm64 import ARM64_OP_MEM
+from claripy.ast.base import Base as AstBase
+from cle.backends.elf import ELF
+from cle.backends.elf.elf import ELFSymbol
 from keystone import *
-from common.utils import abort
 
-class Function:
-    def __init__(self, lib: lief.ELF.Binary, function: lief.Function):
-        self._lib = lib
-        self._function = function
+from common.utils import abort, warn
 
-    @property
-    def name(self) -> str:
-        return self._function.name
+# angr prints too many warnings when executing simulations
+logging.getLogger('angr').setLevel(logging.ERROR)
 
-    @property
-    def address(self) -> int:
-        if self._lib.header.machine_type == lief.ELF.ARCH.ARM:
-            return self._function.address & ~1  # Remove Thumb bit
-
-        return self._function.address
-
-    @property
-    def size(self) -> int:
-        return self._function.size
+class VirtualAddress:
+    def __init__(self, addr: int, rebased: bool):
+        self._addr = addr
+        self._rebased = rebased
     
     @property
     def has_thumb_bit(self) -> bool:
-        if self._lib.header.machine_type == lief.ELF.ARCH.ARM:
-            return (self._function.address & 1) != 0
+        return (self._addr & 1) != 0
 
-        return False
-    
-    def bytes(self, offset: int = 0, amount: int|None = None) -> bytes:
-        target = self.address + offset
-        if target < 0:
-            abort(f'Function "{self.name}": requested bytes at invalid offset {hex(offset)}')
+    def linked_addr(self, lib: 'Lib'):
+        """Returns the linked address corresponding to this virtual address.
+        
+        On ARM, the thumb bit is removed.
+        """
+        addr = self._addr
+        if self._rebased:
+            addr -= lib.lib.mapped_base
+            addr += lib.lib.linked_base
 
-        return self._lib.get_content_from_virtual_address(
-            target, amount or self.size
-        ).tobytes()
+        if addr < 0 or addr >= lib.lib.max_addr - lib.lib.min_addr:
+            abort(f'Invalid address: {hex(addr)}')
+        if addr % 2 != 0 and lib.is_aarch64:
+            abort(f'Unaligned address: {hex(addr)}')
+
+        addr = addr & ~1
+        return addr
+
+    def rebased_addr(self, lib: 'Lib'):
+        """Returns the rebased address corresponding to this virtual address.
+        
+         On ARM, the thumb bit is removed.
+        """
+        return self.linked_addr(lib) + lib.lib.mapped_base - lib.lib.linked_base
     
-    def instructions(self, offset: int = 0,
-                     amount: int|None = None) -> Generator[CsInsn, None, None]:
-        return disasm(
-            self.bytes(offset, amount),
-            self._lib.header.machine_type == lief.ELF.ARCH.AARCH64
+    def calculate_offset(self, lib: 'Lib', target: 'VirtualAddress') -> int:
+        """Calculates the offset required to branch from this 
+        virtual address to the target one.
+        """
+        from_addr = self.linked_addr(lib)
+        to_addr = target.linked_addr(lib)
+        return to_addr - from_addr
+    
+    def __str__(self):
+        return hex(self._addr)
+
+class Lib:
+    def __init__(self, bytes: bytes):
+        self._bytes = bytearray(bytes)
+        self._bytes_len = len(self._bytes)
+
+        self._project = angr.Project(
+            io.BytesIO(bytes), load_options={'auto_load_libs': False}
         )
+        _open_libs.append(self)
+
+        self._aarch64 = isinstance(self.lib.arch, archinfo.ArchAArch64)
+        if not self._aarch64 and not isinstance(self.lib.arch, archinfo.ArchARM):
+            abort(f'Unexpected arch: {self.lib.arch}')
 
     @classmethod
-    def from_name(self, lib: lief.ELF.Binary,
-                  name_pattern: str) -> Generator['Function', None, None]:
-        """Returns all functions that match the name pattern."""
+    def from_path(cls, path: str) -> Self:
+        if not os.path.isfile(path):
+            abort(f'File "{path}" does not exist')
 
-        pattern = re.compile(name_pattern)
-        functions = (Function(lib, f) for f in lib.functions)
-        return (f for f in functions if pattern.match(f.name))
+        with open(path, 'rb') as file:
+            return cls(file.read())
 
-    @classmethod
-    def from_name_single(self, lib: lief.ELF.Binary, name_pattern: str) -> 'Function':
-        """Returns a single function that matches the name pattern.
+    @property
+    def project(self):
+        return self._project
+
+    @property
+    def lib(self) -> ELF:
+        """Equivalent to `project.loader.main_object`."""
+        return self._project.loader.main_object
+
+    @property
+    def is_aarch64(self) -> bool:
+        """`True` if the lib is for the aarch64 architecture, 
+        `False` if it's for arm.
+        """
+        return self._aarch64
+
+    def apply_patch(self, addr: VirtualAddress, patch: bytes|bytearray):
+        """Applies the given patch to the lib at the specified address.
+        The patch must not modify the size of the lib.
         
-        Aborts if none or more than one function is found.
+        Does not modify the file nor the angr project.
         """
-        found = list(Function.from_name(lib, name_pattern))
-        if len(found) == 0:
-            abort(f'No function matches found for "{name_pattern}"')
-        if len(found) > 1:
-            abort(f'Found multiple functions that match "{name_pattern}"')
+        file_address = self.lib.addr_to_offset(addr.rebased_addr(self))
+        if file_address is None:
+            abort(f'Failed to convert address {addr} to file offset')
 
-        return found[0]
-    
-    @classmethod
-    def from_address(self, lib: lief.ELF.Binary, address: int) -> 'Function|None':
-        """Returns the function with the given address,
-        or `None` if no function is found.
-        
-        Aborts if multiple functions are found.
+        self._bytes[file_address:file_address + len(patch)] = patch
+        if len(self._bytes) != self._bytes_len:
+            abort('The size of the patched lib was modified')
+
+    def write_to_file(self, output_path: str):
+        """Writes the patched lib to the specified output path."""
+        if os.path.exists(output_path):
+            abort(f'File "{output_path}" already exists')
+
+        with open(output_path, 'wb') as file:
+            file.write(self._bytes)
+
+    def find_symbols(self, name_pattern: str) -> list[ELFSymbol]:
+        """Returns a list of all the symbols in the lib 
+        whose name matches the given regex pattern.
         """
-        functions = (Function(lib, f) for f in lib.functions)
-        found = [f for f in functions if f.address == address]
-
-        if len(found) == 0:
-            return None
-        elif len(found) > 1:
-            # Some ARM binaries contain the same function twice in the
-            # symbol table, once without the Thumb bit and once with it.
-            if len(found) == 2 and not found[0].has_thumb_bit and found[1].has_thumb_bit:
-                if found[0].size == 0 and found[1].size > 0:
-                    return found[1]
-
-            abort(f'Found multiple functions with address {hex(address)}')
-
-        return found[0]
-    
-    def get_called_functions(self) -> Generator['Function', None, None]:
-        """Gets all the functions called by this function (with `bl`),
-        excluding thunks without symbols.
-        """
-        thunk_patterns = [
-            ['adrp', 'ldr', 'add', 'br'],
-            ['bx pc']
+        name_pattern = re.compile(name_pattern)
+        return [
+            sym for sym in self.lib.symbols_by_name.values() if name_pattern.match(sym.name)
         ]
-
-        for ins in self.instructions():
-            if ins.mnemonic != 'bl':
-                continue
-
-            offset = ins.operands[0].value.imm
-            target_addr = self.address + offset
-            target_func = Function.from_address(self._lib, target_addr)
-            if target_func is None:
-                # This can happen on functions that return early
-                # and have junk instructions after the return
-                if target_addr < 0:
-                    continue
-
-                # Check if the function is a thunk
-                is_thunk = False
-                instructions = list(self.instructions(offset, amount=16))
-                for pattern in thunk_patterns:
-                    for i, expected in enumerate(pattern):
-                        ins = instructions[i]
-                        if ins.mnemonic != expected and f'{ins.mnemonic} {ins.op_str}' != expected:
-                            break
-                    else:
-                        is_thunk = True
-                        break
-
-                # We don't care about thunk functions
-                if is_thunk:
-                    continue
-
-                abort(f'Couldn\'t find any function with address {hex(target_addr)}')
-
-            yield target_func
-
-    def get_return_instructions(self) -> Generator[CsInsn, None, None]:
-        """Finds all the return instructions in this function
-        (`ret`, `pop {..., pc}`).
+    
+    @overload
+    def find_symbol(self, name_pattern: str) -> ELFSymbol|None:
+        """Returns the symbol in the lib whose name matches the given regex pattern,
+        or `None` if no symbol matches.
+        
+        If multiple symbols match the pattern, aborts.
         """
-        aarch64 = self._lib.header.machine_type == lief.ELF.ARCH.AARCH64
-        for ins in self.instructions():
-            if aarch64:
-                if ins.mnemonic == 'ret':
-                    yield ins         
-            if 'pc' in ins.op_str:
-                if ins.mnemonic.startswith('pop'):
-                    yield ins
+        ...
+    @overload
+    def find_symbol(self, address: VirtualAddress) -> ELFSymbol|None:
+        """Returns the symbol in the lib whose address matches the given one,
+        or `None` if no symbol matches.
 
-def apply_patch(data: bytearray, lib: lief.ELF.Binary, address: int, patch: bytes):
-    # We avoid patching with LIEF because it makes too many modifications to the binary
-    for seg in lib.segments:
-        seg_va = seg.virtual_address
-        seg_size = seg.virtual_size
-        if seg_va <= address < seg_va + seg_size:
-            file_address = seg.file_offset + (address - seg_va)
-            data[file_address:file_address + len(patch)] = patch
-            return
+        On ARM, the thumb bit matters.
+        """
+        ...
+    def find_symbol(self, name_or_addr: str|VirtualAddress) -> ELFSymbol|None:
+        if isinstance(name_or_addr, VirtualAddress):
+            addr = name_or_addr.rebased_addr(self)
+            if name_or_addr.has_thumb_bit:
+                addr += 1
 
-    abort(f'Failed to translate virtual address {hex(address)} to file offset')
+            return self.project.loader.find_symbol(addr)
 
-########################################################################
+        syms = self.find_symbols(name_or_addr)
+        if len(syms) == 0:
+            return None
+        elif len(syms) > 1:
+            abort(f'Found multiple symbols that match "{name_or_addr}"')
+
+        return syms[0]
+    
+_open_libs: list[Lib] = []
+def cleanup_angr_cache():
+    """Deletes all the cache directories created by angr."""
+    print('[*] Cleaning up temp files...')
+
+    # Delete all open angr projects to release file locks
+    for lib in _open_libs:
+        del lib
+
+    _open_libs.clear()
+    gc.collect()
+    # Wait a little to ensure the OS released all file locks
+    time.sleep(0.1)
+
+    # Delete dirs that only contain the files "data.mdb" and "lock.mdb"
+    for item in pathlib.Path.cwd().iterdir():
+        if not item.is_dir():
+            continue
+
+        files = list(item.iterdir())
+        if len(files) != 2 or not all(f.name in ['data.mdb', 'lock.mdb'] for f in files):
+            continue
+
+        shutil.rmtree(item, ignore_errors=True)
+
+atexit.register(cleanup_angr_cache)
+
+################################ CLARIPY ################################
+def get_offset_from_symbolic_ast(
+        ast: AstBase, aarch64: bool, def_insn: CsInsn|None = None
+    ) -> int|None:
+    """
+    * If `ast` is TOP ± offset returns offset (with the corresponding sign).
+    * If `ast` is TOP and `def_insn` is "LDR reg1, [reg2, #offset]", returns offset.
+    * If `ast` is TOP, returns `None`.
+
+    Useful to get the offset of a value in a struct.
+    """
+    if ast.concrete:
+        abort(f'Expected a symbolic AST, but got a concrete one: {ast}')
+
+    if ast.op == '__add__' or ast.op == '__sub__':
+        if len(ast.args) != 2:
+            abort(f'Expected an addition/subtraction operation with 2 arguments, but got: {ast}')
+        if ast.args[0].op != 'BVS' or not ast.args[1].concrete:
+            abort(f'Expected an addition/subtraction operation between TOP and a concrete value, but got: {ast}')
+
+        val = ast.args[1].concrete_value
+        return val if ast.op == '__add__' else -val
+    
+    if ast.op == 'Reverse':
+        # Likely not an offset
+        return None
+    if ast.op != 'BVS':
+        abort(f'Unexpected AST operation "{ast.op}": {ast}')
+
+    if def_insn is not None:
+        if def_insn.mnemonic == 'ldrd':
+            # TODO: Check if we can handle this. It doesn't seem to be the case
+            return None
+
+        if not def_insn.mnemonic.startswith('ldr'):
+            if (def_insn.mnemonic == 'ldp' and
+                    len(def_insn.operands) == 3 and
+                    def_insn.operands[2].type in [ARM_OP_MEM, ARM64_OP_MEM] and
+                    reg_name(def_insn.operands[2].mem.base, aarch64) == 'sp'
+                ):
+                # Likely not an offset
+                return None
+
+            abort(f'Unexpected definition instruction "{def_insn.mnemonic} {def_insn.op_str}"')
+        if len(def_insn.operands) != 2:
+            abort(f'Unexpected number of operands in definition instruction: {def_insn.mnemonic} {def_insn.op_str}')
+
+        mem_op = def_insn.operands[1]
+        if mem_op.type not in [ARM_OP_MEM, ARM64_OP_MEM]:
+            abort(f'Unexpected second operand type in definition instruction: {def_insn.mnemonic} {def_insn.op_str}')
+
+        src_reg_name = reg_name(mem_op.mem.base, aarch64)
+        if src_reg_name == 'sp':
+            # Likely not an offset
+            return None
+
+        offset = mem_op.mem.disp
+        return offset
+
+    return None
+
+################################ ANALYSIS ################################
+def get_called_functions(lib: Lib, func: Function) -> Generator[tuple[CsInsn, Function], None, None]:
+    """Yields all the functions called by `func`, along with the call instruction.
+
+    Requires all the functions called by `func` to be present in the knowledge base.
+    """
+    for block_node in func.nodes:
+        if block_node.size == 0:
+            continue
+
+        block: Block = lib.project.factory.block(block_node.addr, size=block_node.size)
+        last_ins: CsInsn = block.capstone.insns[-1]
+        if last_ins.mnemonic not in ['bl', 'blx']:
+            continue
+
+        branch_target = last_ins.operands[0].imm
+        target_func = lib.project.kb.functions.get(branch_target, None)
+        if target_func is None:
+            warn(f'Failed to find function at address {hex(branch_target)}')
+            continue
+
+        yield last_ins, target_func
+
+############################ CAPSTONE / KEYSTONE ############################
 cs_thumb = Cs(CS_ARCH_ARM, CS_MODE_THUMB | CS_MODE_LITTLE_ENDIAN)
-cs_thumb.detail = True
 cs_aarch64 = Cs(CS_ARCH_ARM64, CS_MODE_LITTLE_ENDIAN)
-cs_aarch64.detail = True
 ks_thumb = Ks(KS_ARCH_ARM, KS_MODE_THUMB | KS_MODE_LITTLE_ENDIAN)
 ks_aarch64 = Ks(KS_ARCH_ARM64, KS_MODE_LITTLE_ENDIAN)
 
-def disasm(instructions: bytes,
-           aarch64: bool) -> Generator[CsInsn, None, None]:
-    cs = cs_aarch64 if aarch64 else cs_thumb
-    return cs.disasm(instructions, 0x0)
+HEX = r'(?:0x[0-9a-fA-F]+?)'
+IMMEDIATE = fr'(?:-?\d+?|{HEX})'
 
 def disasm_lite(instructions: bytes, aarch64: bool):
     cs = cs_aarch64 if aarch64 else cs_thumb
@@ -197,10 +317,6 @@ def reg_name(register, aarch64: bool) -> str:
         return cs_aarch64.reg_name(register)
 
     return cs_thumb.reg_name(register)
-
-########################################################################
-HEX = r'(?:0x[0-9a-fA-F]+?)'
-IMMEDIATE = fr'(?:-?\d+?|{HEX})'
 
 def sanitize(pattern: str|None) -> str|None:
     if pattern is None:
@@ -299,7 +415,7 @@ def pop_pattern(
         match_on_extra_regs: bool = False) -> tuple[str, str]:
     ins = r'^pop(?:\.w)?$'
     if popped_registers is None:
-        return ins, fr'^.+?$'
+        return ins, r'^.+?$'
     
     regs = ', '.join([sanitize(reg) for reg in popped_registers])
     if match_on_extra_regs:

@@ -1,3 +1,2 @@
 keystone-engine==0.9.2
-capstone==5.0.6
-lief==0.17.0
+angr==9.2.205

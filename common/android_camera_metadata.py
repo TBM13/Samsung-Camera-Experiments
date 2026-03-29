@@ -1,5 +1,11 @@
 import enum
 
+
+class CameraMetadataTag(enum.IntEnum):
+    ANDROID_REQUEST_AVAILABLE_CAPABILITIES = 786444
+    ANDROID_SENSOR_BLACK_LEVEL_PATTERN = 917516
+    ANDROID_INFO_SUPPORTED_HARDWARE_LEVEL = 1376256
+
 #
 # https://developer.android.com/reference/android/hardware/camera2/CameraMetadata
 #

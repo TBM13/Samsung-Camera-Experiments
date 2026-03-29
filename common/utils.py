@@ -4,8 +4,15 @@ import shutil
 import sys
 import zipfile
 
+
+def warn(msg: str):
+    print(f'\033[33m[!] {msg}\033[0m')
+
+def error(msg: str):
+    print(f'\033[31m[!] {msg}\033[0m')
+
 def abort(msg: str):
-    print(f'\nAbort: {msg}')
+    print(f'\n\033[31mAbort: {msg}\033[0m')
     sys.exit(1)
 
 def create_magisk_module(
