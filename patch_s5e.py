@@ -2,12 +2,13 @@
 import argparse
 import enum
 import os
-from typing import Generator
 
-import lief
+from keystone import KsError
+
 from common.android_camera_metadata import SupportedHardwareLevel
 from common.patch_utils import *
-from common.utils import abort, create_magisk_module
+from common.utils import abort, create_magisk_module, warn
+
 
 class Capability(enum.IntEnum):
     # BackwardCompatible = 1     - Always enabled, so no need to list it
@@ -30,24 +31,30 @@ class Capability(enum.IntEnum):
 
     ColorSpaceProfiles = 65536
 
-def capabilities_mod(lib: lief.ELF.Binary,
-                     hw_level: SupportedHardwareLevel|None = None, 
-                     enable_capabilities: list[Capability]|None = None
-    ) -> Generator[tuple[int, bytes], None, None]:
+def capabilities_mod(
+        lib: Lib,
+        hw_level: SupportedHardwareLevel|None = None, 
+        enable_capabilities: list[Capability]|None = None
+    ):
     aarch64 = True
 
     # CameraCapability::getValueStr takes a capabilities bitmask and a string buffer.
     # It then builds a string listing the enabled capabilities. We can initialize the buffer
     # to an empty string, return early and replace the following instructions with our mod.
-    getValueStr_func = Function.from_name_single(
-        lib, '^_ZNK16CameraCapability11getValueStrEv$'
-    )
-    print(f'[+] Found CameraCapability::getValueStr function')
+    getValueStr = lib.find_symbol('^_ZNK16CameraCapability11getValueStrEv$')
+    if getValueStr is None:
+        abort('Failed to find CameraCapability::getValueStr function')
+    print('[+] Found CameraCapability::getValueStr function')
+
+    getValueStr_addr = VirtualAddress(getValueStr.rebased_addr, True)
+    getValueStr_start_block: Block = lib.project.factory.block(getValueStr.rebased_addr, size=20 * 4)
 
     # Search for the empty string initialization at the start of getValueStr
+    # TODO: We should probably do a RDA here
     movs: dict[str, str] = {}
     empty_bytes_initialized: dict[str, int] = {}
-    for ins in getValueStr_func.instructions(amount=20 * 4):
+    for ins in getValueStr_start_block.capstone.insns:
+        ins: CsInsn = ins
         if ins.mnemonic == 'mov':
             dst = reg_name(ins.operands[0].reg, aarch64)
             src = reg_name(ins.operands[1].reg, aarch64)
@@ -93,20 +100,19 @@ def capabilities_mod(lib: lief.ELF.Binary,
             abort(f'Too many movs to resolve register {str_reg}')
 
     print(f'[+] Found string register {str_reg}')
-    first_instructions = list(getValueStr_func.instructions(amount=8))
 
     # Initialize empty string at the start of the function and return
-    empty_string_initialization = bytes()
+    empty_string_initialization = bytearray()
     has_paciasp = False
-    if first_instructions[0].mnemonic == 'paciasp':
+    if getValueStr_start_block.capstone.insns[0].mnemonic == 'paciasp':
         # Preserve paciasp, otherwise lib will crash
-        empty_string_initialization += getValueStr_func.bytes(amount=4)
-        sp_reservation = first_instructions[1]
+        empty_string_initialization += getValueStr_start_block.capstone.insns[0].bytes
+        sp_reservation: CsInsn = getValueStr_start_block.capstone.insns[1]
         has_paciasp = True
 
         print('[*] Lib has Pointer Authentication')
     else:
-        sp_reservation = first_instructions[0]
+        sp_reservation: CsInsn = getValueStr_start_block.capstone.insns[0]
 
     if (sp_reservation.mnemonic != 'sub'
         or reg_name(sp_reservation.operands[0].reg, aarch64) != 'sp'
@@ -123,27 +129,29 @@ def capabilities_mod(lib: lief.ELF.Binary,
         empty_string_initialization += b'\xBF\x23\x03\xD5'  # AUTIASP
     empty_string_initialization += asm('RET', aarch64)
 
-    yield getValueStr_func.address, empty_string_initialization
+    yield getValueStr_addr, empty_string_initialization
 
     # Prepare mod
-    mod: list[bytes] = []
-    mod_tail: list[bytes] = []
-    mod_address = getValueStr_func.address + len(empty_string_initialization)
+    mod = Mod(
+        start_addr=getValueStr_addr + len(empty_string_initialization),
+        max_size=getValueStr.size - len(empty_string_initialization),
+        is_aarch64=aarch64
+    )
 
     # CameraCapability::init takes the hw level and the camera's capabilities bitmask,
     # then sets the hw level and adds more capabilities (or not) depending on its value.
-    init_func = Function.from_name_single(
-        lib, '^_ZN16CameraCapability4initEh29AvailableCameraCapabilityType$'
-    )
+    init = lib.find_symbol(r'^_ZN16CameraCapability4initEh29AvailableCameraCapabilityType$')
+    if init is None:
+        abort('Failed to find CameraCapability::init function')
     bitmask_reg = 'x2'
-    print(f'[+] Found CameraCapability::init function')
+    print('[+] Found CameraCapability::init function')
 
-    first_instructions: list[CsInsn] = list(init_func.instructions(amount=8))
-    if first_instructions[0].mnemonic == 'bti':
-        init_mov_ins = first_instructions[1]
+    init_start_block: Block = lib.project.factory.block(init.rebased_addr, size=8 * 4)
+    if init_start_block.capstone.insns[0].mnemonic == 'bti':
+        init_mov_ins: CsInsn = init_start_block.capstone.insns[1]
         print('[*] Lib has Branch Target Identification')
     else:
-        init_mov_ins = first_instructions[0]
+        init_mov_ins: CsInsn = init_start_block.capstone.insns[0]
 
     if init_mov_ins.mnemonic != 'mov':
         abort(f'Unexpected first instruction {init_mov_ins.mnemonic}')
@@ -151,21 +159,16 @@ def capabilities_mod(lib: lief.ELF.Binary,
     free_reg = reg_name(init_mov_ins.operands[0].reg, aarch64).replace('w', 'x')
     print(f'[+] Found free register {free_reg}')
 
-    # Add the mov at the end of the mod
-    mod_tail.append(init_mov_ins.bytes)
-    # Replace init's mov with a branch to the mod
-    branch_offset = mod_address - (init_func.address + init_mov_ins.address)
-    yield init_func.address + init_mov_ins.address, asm(f'b #{branch_offset}', aarch64)
+    # Replace the MOV with a branch to the mod
+    init_mov_ins_addr = VirtualAddress(init_mov_ins.address, True)
+    yield init_mov_ins_addr, mod.assemble_branch_to_mod(lib, init_mov_ins_addr)
+    # Add the MOV at the end of the mod
+    mod.add_exit_instruction(init_mov_ins.bytes)
 
     ########################## MOD ##########################
-    # When exiting the mod we want to execute whatever was after the MOV instruction
-    exit_address = init_func.address + init_mov_ins.address + init_mov_ins.size
-
     # Set hardware level (modify hw level argument)
     if hw_level is not None:
-        mod.append(
-            asm(f'mov w1, #{hw_level.value}', aarch64)
-        )
+        mod.add_instruction(f'mov w1, #{hw_level.value}')
         print(f'- Changing hardware level to {hw_level.name}')
 
     # Enable capabilities (modify bitmask argument)
@@ -174,30 +177,22 @@ def capabilities_mod(lib: lief.ELF.Binary,
         for cap in enable_capabilities:
             value |= cap.value
         try:
-            mod.append(
-                asm(f'orr {bitmask_reg}, {bitmask_reg}, #{value}', aarch64)
-            )
+            mod.add_instruction(f'orr {bitmask_reg}, {bitmask_reg}, #{value}')
         except KsError:
             # ORR doesn't support the immediate value, so store it in a register
-            mod.extend([
-                asm(f'mov {free_reg}, #{value}', aarch64),
-                asm(f'orr {bitmask_reg}, {bitmask_reg}, {free_reg}', aarch64)
-            ])
+            mod.add_instruction(f'mov {free_reg}, #{value}')
+            mod.add_instruction(f'orr {bitmask_reg}, {bitmask_reg}, {free_reg}')
 
         cap = ', '.join([c.name for c in enable_capabilities])
         print(f'- Enabling capabilities: {cap}')
 
-    # Exit mod
-    mod += mod_tail
-    mod_size = sum(len(b) for b in mod)
-    branch_offset = exit_address - (mod_address + mod_size)
-    mod.append(asm(f'b #{branch_offset}', aarch64))
+    # Exit mod (execute whatever was after the MOV instruction in init)
+    exit_address: VirtualAddress = init_mov_ins_addr + init_mov_ins.size
+    mod.add_exit_instruction(
+        f'b 0x{exit_address.linked_addr(lib):x}'
+    )
 
-    mod = b''.join(mod)
-    if len(mod) > getValueStr_func.size - (mod_address - getValueStr_func.address):
-        abort('Mod doesn\'t fit in the available space')
-
-    yield mod_address, mod
+    yield mod.start_addr, mod.assemble(lib)
 
 ########################################################################
 def parse_args() -> argparse.Namespace:
@@ -265,37 +260,29 @@ def main():
 
     out_libs: list[str] = []
     for file in args.libs:
-        base, _ = os.path.splitext(file.name)
-        output_path = f'{base}_patched.so'
-
-        lib_data = bytearray(file.read())
-        original_len = len(lib_data)
-        lib = lief.parse(file.name)
+        lib = Lib(file.read())
         file.close()
 
-        if lib is None:
-            abort(f'Failed to parse "{file.name}" as an ELF binary')
-        if lib.header.machine_type != lief.ELF.ARCH.AARCH64:
-            # So far I haven't found a 32-bit camera.s5eXXXX.so lib
+        if not lib.is_aarch64:
+            # So far I haven't found any 32-bit camera.s5eXXXX.so lib
             abort('32-bit libs are not supported')
 
         print(f'\n[*] Patching "{file.name}"...')
-        if 'libexynoscamera3.so' in lib.libraries:
+        if 'libexynoscamera3.so' in lib.lib.deps:
             # Exynos 1280 devices include a camera.s5e8825.so lib
             # that is a wrapper for libexynoscamera3.so
-            print(f'[!] The lib depends on libexynoscamera3.so, you may want to patch that one instead')
+            warn('The lib depends on libexynoscamera3.so. You should patch that one instead')
 
         for address, bytes in capabilities_mod(
             lib=lib,
             hw_level=args.hardware_level,
             enable_capabilities=args.enable_cap,
         ):
-            apply_patch(lib_data, lib, address, bytes)
+            lib.apply_patch(address, bytes)
 
-        if len(lib_data) != original_len:
-            abort('The size of the patched lib was modified')
-        with open(output_path, 'wb') as out_file:
-            out_file.write(lib_data)
+        base, _ = os.path.splitext(file.name)
+        output_path = f'{base}_patched.so'
+        lib.write_to_file(output_path)
 
         print(f'[+] Patched lib saved as "{output_path}"')
         out_libs.append(output_path)
@@ -309,7 +296,7 @@ def main():
     ):
         mods = []
         if args.enable_cap is not None:
-            mods.append(f'enables ' + ', '.join([x.name for x in args.enable_cap]))
+            mods.append('enables ' + ', '.join([x.name for x in args.enable_cap]))
         if args.hardware_level is not None:
             mods.append(f'sets hardware level to {args.hardware_level.name}')
 

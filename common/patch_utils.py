@@ -98,6 +98,7 @@ class Mod:
         self._start_addr = start_addr
         self._max_size = max_size
         self._is_aarch64 = is_aarch64
+
         self._instructions: list[str] = []
         self._exit_instructions: list[str] = [
             self.exit_label + ':',
@@ -117,59 +118,136 @@ class Mod:
         """The label that should be branched to in order to exit the mod."""
         return 'exit'
     
-    def add_instruction(self, ins: str|bytes|bytearray):
-        """Adds the given instruction to the mod.
-        
-        Branches to places outside the mod should use absolute (linked) addresses.
-        """
+    def _add_instruction(self, ins: str|bytes|bytearray, is_exit_ins: bool = False):
+        original_ins = ins
         if not isinstance(ins, str):
-            if self._is_aarch64 and len(ins) % 4 != 0:
+            if self._is_aarch64 and len(ins) != 4:
                 abort(f'Invalid instruction size: {len(ins)} bytes')
-            elif not self._is_aarch64 and len(ins) % 2 != 0:
+            elif not self._is_aarch64 and len(ins) not in [2, 4]:
                 abort(f'Invalid instruction size: {len(ins)} bytes')
 
             hex_list = [f'0x{b:02x}' for b in ins]
             ins = '.byte ' + ', '.join(hex_list)
+        
+        if '\n' in ins:
+            abort('Only a single instruction can be added at a time')
 
-        # Ensure the instruction is valid
-        asm(ins + f'\n{self.exit_label}:\nNOP', self._is_aarch64)
-        self._instructions.append(ins)
+        # Ensure the instruction is valid and keystone can assemble it
+        assembled = asm(f'{self.exit_label}:\n' + ins, self._is_aarch64)
+        if isinstance(original_ins, str):
+            if len(assembled) != 4 and (len(assembled) != 2 or self._is_aarch64):
+                abort(f'Keystone failed to assemble "{ins}"')
+        elif assembled != original_ins:
+            abort(f'Keystone failed to assemble "{ins}"')
 
+        if is_exit_ins:
+            self._exit_instructions.append(ins)
+        else:
+            self._instructions.append(ins)
+
+    def add_instruction(self, ins: str|bytes|bytearray):
+        """Adds the given instruction to the mod.
+        
+        * Branches to places outside the mod should use absolute (linked) addresses
+        (e.g. `b 0x12345`).
+        """
+        self._add_instruction(ins, False)
     def add_exit_instruction(self, ins: str|bytes|bytearray):
         """Exit instructions are added after the `exit_label` and will
         be executed when the mod exits.
 
-        Branches to places outside the mod should use absolute (linked) addresses
+        * Branches to places outside the mod should use absolute (linked) addresses
         (e.g. `b 0x12345`).
         """
-        if not isinstance(ins, str):
-            if self._is_aarch64 and len(ins) % 4 != 0:
-                abort(f'Invalid instruction size: {len(ins)} bytes')
-            elif not self._is_aarch64 and len(ins) % 2 != 0:
-                abort(f'Invalid instruction size: {len(ins)} bytes')
-
-            hex_list = [f'0x{b:02x}' for b in ins]
-            ins = '.byte ' + ', '.join(hex_list)
-
-        # Ensure the instruction is valid
-        asm(ins + f'\n{self.exit_label}:\nNOP', self._is_aarch64)
-        self._exit_instructions.append(ins)
+        self._add_instruction(ins, True)
 
     def assemble(self, lib: 'Lib') -> bytes:
         """Assembles the mod's instructions and returns the corresponding bytes."""
         if len(self._exit_instructions) == 1:
             abort('Cannot assemble a mod with no exit instructions')
 
-        bytes = asm(
-            self._instructions + self._exit_instructions,
+        # instructions added with .byte aren't considered by keystone when calculating
+        # branch offsets, so lets temporarily replace them with placeholders
+        nop1 = 'nop'
+        nop1_asm = asm(nop1, self._is_aarch64)
+        nop2 = 'mov x0, x0' if self._is_aarch64 else 'mov r1, r1'
+        nop2_asm = asm(nop2, self._is_aarch64)
+        if len(nop1_asm) != len(nop2_asm):
+            abort('Unexpected placeholder instruction sizes')
+        for (b1, b2) in zip(nop1_asm, nop2_asm):
+            if b1 == b2:
+                abort('Invalid placeholder instructions, they must not contain common bytes')
+
+        instructions_with_nops1 = self._instructions + self._exit_instructions
+        instructions_with_nops2 = self._instructions + self._exit_instructions
+        raw_bytes: list[bytes] = []
+        for i, ins in enumerate(instructions_with_nops1):
+            if not ins.startswith('.byte '):
+                continue
+
+            ins_bytes = ins[6:].strip().split(', ')
+            ins_bytes = bytes([int(b, 0) for b in ins_bytes])
+            raw_bytes.append(ins_bytes)
+
+            if len(ins_bytes) == 0 or len(ins_bytes) % len(nop1_asm) != 0:
+                abort(f'Invalid .byte instruction: {ins}')
+
+            required_nops = len(ins_bytes) // len(nop1_asm)
+            instructions_with_nops1[i] = '\n'.join([nop1] * required_nops)
+            instructions_with_nops2[i] = '\n'.join([nop2] * required_nops)
+
+        asm_bytes_nops1 = asm(
+            instructions_with_nops1,
             self._is_aarch64,
             self.start_addr.linked_addr(lib)
         )
-        if len(bytes) > self._max_size:
-            abort(f'Assembled mod is too big: {len(bytes)} bytes (max {self._max_size}).' +
+        if len(asm_bytes_nops1) > self._max_size:
+            abort(f'Assembled mod is too big: {len(asm_bytes_nops1)} bytes (max {self._max_size}).' +
                   ' Try again with less modifications')
-            
-        return bytes
+        if len(raw_bytes) == 0:
+            # No need to do anything since there aren't any .byte directives
+            return asm_bytes_nops1
+
+        asm_bytes_nops2 = asm(
+            instructions_with_nops2,
+            self._is_aarch64,
+            self.start_addr.linked_addr(lib)
+        )
+        if len(asm_bytes_nops1) != len(asm_bytes_nops2):
+            abort('Assembled bytes have different sizes')
+
+        # Replace the placeholders with the original raw bytes
+        placed_raw_bytes = 0
+        consecutive_different_bytes = 0
+        final_bytes = bytearray(asm_bytes_nops1)
+        def place_raw_bytes(i: int):
+            nonlocal placed_raw_bytes, consecutive_different_bytes
+
+            to_place = raw_bytes[placed_raw_bytes]
+            if consecutive_different_bytes != len(to_place):
+                abort('Something went wrong with the mod assembly')
+
+            final_bytes[i - consecutive_different_bytes:i] = to_place
+            placed_raw_bytes += 1
+            consecutive_different_bytes = 0
+
+        for i, (b1, b2) in enumerate(zip(asm_bytes_nops1, asm_bytes_nops2)):
+            if b1 != b2:
+                if placed_raw_bytes >= len(raw_bytes):
+                    abort('Something went wrong with the mod assembly')
+
+                consecutive_different_bytes += 1
+                continue
+
+            if consecutive_different_bytes != 0:
+                place_raw_bytes(i)
+
+        if consecutive_different_bytes != 0:
+            place_raw_bytes(len(asm_bytes_nops1))
+        if placed_raw_bytes != len(raw_bytes):
+            abort('Failed to place all raw bytes')
+
+        return final_bytes
     
     def assemble_branch_to_mod(self, lib: 'Lib', from_addr: VirtualAddress) -> bytes:
         """Assembles a branch instruction to the mod from the given address."""
