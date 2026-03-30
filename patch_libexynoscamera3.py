@@ -11,11 +11,10 @@ logging.getLogger('angr').setLevel(logging.CRITICAL)
 
 from angr.knowledge_plugins.key_definitions.constants import OP_BEFORE
 from claripy.ast.bv import BV
-from keystone import KsError
-
 from common.android_camera_metadata import CameraMetadataTag, SupportedHardwareLevel
 from common.patch_utils import *
 from common.utils import abort, create_magisk_module, warn
+from keystone import KsError
 
 
 class Capability(enum.IntEnum):
@@ -271,6 +270,7 @@ def create_ExynosCameraSensorInfo_mod(
     if 'createExynosCamera3SensorInfo' in createExynosCameraSensorInfo.name:
         print('[+] Found createExynosCamera3SensorInfo function (legacy libexynoscamera3 lib), analyzing...')
         sensor_prefix = 'ExynosCamera3Sensor'
+        abort('Legacy libexynoscamera3 libs are not supported yet')
     else:
         print('[+] Found createExynosCameraSensorInfo function, analyzing...')
         sensor_prefix = 'ExynosCameraSensor'
