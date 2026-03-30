@@ -7,7 +7,7 @@ This repository contains two Python scripts that can patch the camera lib of Exy
   * Located at `/vendor/lib64/hw/`.
   * The exact file name varies depending on your device. Look for something similar to `camera.s5e8835.so`.
 
-Both scripts require Python 3.10 or higher. \
+Both scripts require Python 3.11 or higher. \
 Make sure to **download the whole repository** (and not just the `patch_*.py` script) & **install the dependencies** too (`pip install -r requirements.txt`).
 
 If the script fails to patch your lib, open an issue with your device model and attach the lib(s).
