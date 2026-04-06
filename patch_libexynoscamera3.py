@@ -1,21 +1,20 @@
 #!/usr/bin/python3
 import argparse
 import enum
-import logging
 import math
 import os
 import re
 
-# angr prints an error when it's imported and unicorn engine is not installed
-logging.getLogger('angr').setLevel(logging.CRITICAL)
+from common.android_camera_metadata import CameraMetadataTag, SupportedHardwareLevel
+from common.patch_utils import *
+from common.utils import abort, create_magisk_module, warn
+
+# We need to import patch_utils before angr, to filter irrelevant error messages
+...
 
 from angr.knowledge_plugins.key_definitions.constants import OP_BEFORE
 from claripy.ast.bv import BV
 from keystone import KsError
-
-from common.android_camera_metadata import CameraMetadataTag, SupportedHardwareLevel
-from common.patch_utils import *
-from common.utils import abort, create_magisk_module, warn
 
 
 class Capability(enum.IntEnum):

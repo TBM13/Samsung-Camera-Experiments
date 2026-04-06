@@ -1,9 +1,18 @@
+import logging
 import os
 import re
 import shutil
 import sys
 import zipfile
 
+
+class KeywordFilter(logging.Filter):
+    def __init__(self, keyword: str):
+        super().__init__()
+        self._keyword = keyword
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return self._keyword not in record.getMessage()
 
 def warn(msg: str):
     print(f'\033[33m[!] {msg}\033[0m')

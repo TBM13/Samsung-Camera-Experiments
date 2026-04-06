@@ -9,8 +9,11 @@ import shutil
 import time
 from typing import Generator, Self, overload
 
+from common.capstone_utils import *
+from common.utils import KeywordFilter, abort, warn
+
 # angr prints an error when it's imported and unicorn engine is not installed
-logging.getLogger('angr').setLevel(logging.CRITICAL)
+logging.getLogger('angr.state_plugins.unicorn_engine').setLevel(logging.CRITICAL)
 
 import angr
 import archinfo
@@ -22,11 +25,10 @@ from claripy.ast.base import Base as AstBase
 from cle.backends.elf import ELF
 from cle.backends.elf.elf import ELFSymbol
 
-from common.capstone_utils import *
-from common.utils import abort, warn
-
-# angr prints too many warnings when executing simulations
-logging.getLogger('angr').setLevel(logging.ERROR)
+# Filter unnecesary log lines
+logging.getLogger('cle.loader').addFilter(
+    KeywordFilter('Symbol imported without a known size')
+)
 
 class VirtualAddress:
     def __init__(self, addr: int, rebased: bool):
