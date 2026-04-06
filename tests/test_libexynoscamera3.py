@@ -91,34 +91,31 @@ LIBS_DATA = [
 ]
 
 def find_capabilities_and_hwlevel_offsets(lib: bytes, queue: multiprocessing.Queue):
-    import common.patch_utils as putils
-    import patch_libexynoscamera3 as pcam3
+    import patch_libexynoscamera3 as patch
     # Ensure that prints from this process are flushed immediately
     sys.stdout.reconfigure(line_buffering=True)
 
-    lib = putils.Lib(lib)
-    res = pcam3._find_capabilities_and_hwlevel_offsets(lib)
+    lib = patch.Lib3(lib)
+    res = patch._find_capabilities_and_hwlevel_offsets(lib)
     queue.put(res)
 
 def find_struct_offsets(lib: bytes, queue: multiprocessing.Queue):
-    import common.patch_utils as putils
-    import patch_libexynoscamera3 as pcam3
+    import patch_libexynoscamera3 as patch
     # Ensure that prints from this process are flushed immediately
     sys.stdout.reconfigure(line_buffering=True)
 
-    lib = putils.Lib(lib)
-    res = pcam3.find_struct_offsets(lib, tags=list(CameraMetadataTag))
+    lib = patch.Lib3(lib)
+    res = patch.find_struct_offsets(lib, tags=list(CameraMetadataTag))
     queue.put(res)
 
 def create_ExynosCameraSensorInfo_mod(lib: bytes, queue: multiprocessing.Queue):
-    import common.patch_utils as putils
-    import patch_libexynoscamera3 as pcam3
+    import patch_libexynoscamera3 as patch
 
     stdout_buffer = io.StringIO()
     sys.stdout = Tee(sys.stdout, stdout_buffer)
 
-    lib: putils.Lib = putils.Lib(lib)
-    mod = list(pcam3.create_ExynosCameraSensorInfo_mod(lib))
+    lib: patch.Lib3 = patch.Lib3(lib)
+    mod = list(patch.create_ExynosCameraSensorInfo_mod(lib))
     unused_constructor_addr, _ = mod[0]
     return_addr, _ = mod[1]
 

@@ -11,10 +11,11 @@ logging.getLogger('angr').setLevel(logging.CRITICAL)
 
 from angr.knowledge_plugins.key_definitions.constants import OP_BEFORE
 from claripy.ast.bv import BV
+from keystone import KsError
+
 from common.android_camera_metadata import CameraMetadataTag, SupportedHardwareLevel
 from common.patch_utils import *
 from common.utils import abort, create_magisk_module, warn
-from keystone import KsError
 
 
 class Capability(enum.IntEnum):
@@ -30,15 +31,43 @@ class Capability(enum.IntEnum):
     LogicalMultiCamera = 1024
     SecureImageData = 2048
 
-def _find_capabilities_and_hwlevel_offsets(lib: Lib) -> dict[CameraMetadataTag, int]:
+class Lib3(Lib):
+    def __init__(self, bytes: bytes):
+        super().__init__(bytes)
+
+        self._is_legacy = self.find_symbol(
+            r'^_ZN7android\d\dExynosCameraMetadataConverter29m_createAvailableCapabilities.+'
+        ) is None
+
+        if self.is_legacy:
+            abort('Legacy lib detected. Patching these libs is not supported yet')
+            warn('Legacy lib detected. Patching these libs is highly experimental!')
+
+    @property
+    def is_legacy(self) -> bool:
+        """If true, this is a legacy libexynoscamera3 lib (from
+        devices that launched with Android 8 or earlier).
+        
+        The main difference is that the capabilities are stored as an
+        array instead of a bitmask.
+        """
+        return self._is_legacy
+
+def _find_capabilities_and_hwlevel_offsets(lib: Lib3) -> dict[CameraMetadataTag, int]:
     aarch64 = lib.is_aarch64
     func = lib.find_symbol(
         r'^_ZN7android\d\dExynosCamera3?MetadataConverter29m_createAvailableCapabilities.+'
     )
     if func is None:
-        warn('Failed to find m_createAvailableCapabilities function. This is normal on older libexynoscamera3 libs')
-        return {}
-    
+        # this is normal on legacy libs
+        if lib.is_legacy:
+            return {}
+
+        abort('Failed to find m_createAvailableCapabilities function')
+    if 'ExynosCamera3' in func.name or lib.is_legacy:
+        # this function should not be present on legacy libs
+        abort('Failed to determine whether the lib is legacy or not')
+
     # The first arg of the function contains the camera config struct.
     # At the start there is an android_log_print call that logs the
     # hw level and the capabilities. We can grab the offsets there.
@@ -97,13 +126,13 @@ def _find_capabilities_and_hwlevel_offsets(lib: Lib) -> dict[CameraMetadataTag, 
         CameraMetadataTag.ANDROID_REQUEST_AVAILABLE_CAPABILITIES: cap_offset
     }
 
-def find_struct_offsets(lib: Lib, tags: list[CameraMetadataTag]) -> dict[CameraMetadataTag, int]:
+def find_struct_offsets(lib: Lib3, tags: list[CameraMetadataTag]) -> dict[CameraMetadataTag, int]:
     tag_offsets: dict[CameraMetadataTag, int] = {}
 
-    # On modern libexynoscamera3 libs we can get these two offsets directly
+    # On non-legacy libexynoscamera3 libs we can get these two offsets directly
     # in ExynosCameraMetadataConverter::m_createAvailableCapabilities.
-    # It's quicker and also we can't get the capabilities offset
-    # in constructStaticInfo on these newer libs
+    # It's quicker and also a necessity if we want the capabilities offset
+    # (it can't be obtained in constructStaticInfo).
     if (CameraMetadataTag.ANDROID_INFO_SUPPORTED_HARDWARE_LEVEL in tags
         or CameraMetadataTag.ANDROID_REQUEST_AVAILABLE_CAPABILITIES in tags):
         tag_offsets.update(
@@ -119,6 +148,8 @@ def find_struct_offsets(lib: Lib, tags: list[CameraMetadataTag]) -> dict[CameraM
     )
     if construct_static_info is None:
         abort('Failed to find constructStaticInfo function')
+    if 'ExynosCamera3' in construct_static_info.name and not lib.is_legacy:
+        abort('Failed to determine whether the lib is legacy or not')
 
     print('[+] Found constructStaticInfo function, analyzing...')
     cfg = lib.project.analyses.CFGFast(
@@ -225,6 +256,13 @@ def find_struct_offsets(lib: Lib, tags: list[CameraMetadataTag]) -> dict[CameraM
 
         if tag in CameraMetadataTag:
             tag = CameraMetadataTag(tag)
+
+            if (tag == CameraMetadataTag.ANDROID_REQUEST_AVAILABLE_CAPABILITIES
+                and offset is not None and not lib.is_legacy):
+                # On non-legacy libs, it shouldn't be possible to obtain the
+                # capabilities offset on constructStaticInfo
+                abort('Failed to determine whether the lib is legacy or not')
+
             if tag in tag_offsets:
                 if tag_offsets[tag] != offset:
                     abort(f'Multiple offsets found for {tag.name}: {hex(tag_offsets[tag])} and {hex(offset)}')
@@ -245,7 +283,7 @@ def find_struct_offsets(lib: Lib, tags: list[CameraMetadataTag]) -> dict[CameraM
     return tag_offsets
 
 def create_ExynosCameraSensorInfo_mod(
-        lib: Lib,
+        lib: Lib3,
         enable_capabilities: list[Capability]|None = None,
         disable_capabilities: list[Capability]|None = None,
         hw_level: SupportedHardwareLevel|None = None,
@@ -267,14 +305,15 @@ def create_ExynosCameraSensorInfo_mod(
     )
     if createExynosCameraSensorInfo is None:
         abort('Failed to find createExynosCameraSensorInfo function')
-    if 'createExynosCamera3SensorInfo' in createExynosCameraSensorInfo.name:
-        print('[+] Found createExynosCamera3SensorInfo function (legacy libexynoscamera3 lib), analyzing...')
+    if 'ExynosCamera3' in createExynosCameraSensorInfo.name:
+        if not lib.is_legacy:
+            abort('Failed to determine whether the lib is legacy or not')
+
         sensor_prefix = 'ExynosCamera3Sensor'
-        abort('Legacy libexynoscamera3 libs are not supported yet')
     else:
-        print('[+] Found createExynosCameraSensorInfo function, analyzing...')
         sensor_prefix = 'ExynosCameraSensor'
 
+    print('[+] Found createExynosCameraSensorInfo function, analyzing...')
     cfg = lib.project.analyses.CFGFast(
         normalize=True,
 
@@ -498,10 +537,10 @@ def main():
 
     out_libs: list[str] = []
     for file in args.libs:
-        lib = Lib(file.read())
+        print(f'\n[*] Patching "{file.name}"...')
+        lib = Lib3(file.read())
         file.close()
 
-        print(f'\n[*] Patching "{file.name}"...')
         for address, patch_bytes in create_ExynosCameraSensorInfo_mod(
             lib=lib,
             enable_capabilities=args.enable_cap,
