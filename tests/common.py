@@ -50,7 +50,7 @@ class LibTestCase(unittest.TestCase):
         """Executes the test in a separate process to prevent high memory usage,
            since angr never releases all the memory it allocates.
         """
-        print('###### ' + lib_data.path + ' ######', flush=True)
+        print('\n###### ' + lib_data.path + ' ######', flush=True)
         lib = self.read_lib(lib_data.path)
 
         queue = multiprocessing.Queue()

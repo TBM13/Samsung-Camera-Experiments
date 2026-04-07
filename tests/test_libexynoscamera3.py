@@ -6,19 +6,12 @@ from common.android_camera_metadata import *
 from tests.common import *
 
 
+@dataclass
 class LibData(BaseLibData):
-    def __init__(
-            self, path: str,
-            hw_level_offset: int, capabilities_offset: int,
-            return_ins_address: int,
-            used_camera_names: list[str]
-        ):
-        self.hw_level_offset = hw_level_offset
-        self.available_cap_offset = capabilities_offset
-        self.return_ins_address = return_ins_address
-        self.used_camera_names = used_camera_names
-
-        super().__init__(path)
+    hw_level_offset: int
+    available_cap_offset: int
+    return_ins_address: int
+    used_camera_names: list[str]
 
 LIBS_DATA = [
     # Exynos 850
