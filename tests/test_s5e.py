@@ -21,8 +21,34 @@ class LibData(BaseLibData):
     """
 
 LIBS_DATA = [
+    # Exynos 1330 (S5E8535)
+    LibData('a16_u.so', False, 'x8', 'w8'),
+
+    # Exynos 1380 (S5E8835)
+    LibData('a54_t.so', False, 'x8', 'w8'),
+    LibData('a54_b.so', False, 'x8', 'w8'),
+
+    # Exynos 1480 (S5E8845)
+    LibData('a55_v.so', False, 'x8', 'w8'),
+
+    # Exynos 1580 (S5E8855)
+    # TODO: A56 camera libs seem to be stripped?
+
+    # Exynos 1680 (S5E8865)
+    # TODO: Find libs
+
+    # Exynos 2200 (S5E9925)
+    # Android 14 libs seem to be a wrapper of libexynoscamera3
+    # TODO: Confirm if this is the case with newer libs
+
     # Exynos 2400e (S5E9945)
     LibData('s24fe_b.so', True, 'x8', 'w8'),
+
+    # Exynos 2500 (S5E9955)
+    # LibData('zflip7_b.so', True, 'x8', 'w8'),   TODO: Support lib
+
+    # Exynos 2600 (S5E9965)
+    # TODO: Find libs
 ]
 
 def create_mod_cave(lib: bytes, queue: multiprocessing.Queue):
