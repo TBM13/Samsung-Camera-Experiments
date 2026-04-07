@@ -256,10 +256,28 @@ class Mod:
         offset = from_addr.calculate_offset(lib, self.start_addr)
         return asm(f'b #{offset}', self._is_aarch64)
 
+class AppliedPatch:
+    """Represents a patch that has been applied to a binary."""
+    def __init__(self, file_offset: int, original_bytes: bytes|bytearray, patched_bytes: bytes|bytearray):
+        self._file_offset = file_offset
+        self._original_bytes = original_bytes
+        self._patched_bytes = patched_bytes
+
+    @property
+    def file_offset(self) -> int:
+        return self._file_offset
+    @property
+    def original_bytes(self) -> bytes|bytearray:
+        return self._original_bytes
+    @property
+    def patched_bytes(self) -> bytes|bytearray:
+        return self._patched_bytes
+
 class Lib:
     def __init__(self, bytes: bytes):
         self._bytes = bytearray(bytes)
         self._bytes_len = len(self._bytes)
+        self._applied_patches: list[AppliedPatch] = []
 
         self._project = angr.Project(
             io.BytesIO(bytes), load_options={'auto_load_libs': False}
@@ -293,6 +311,11 @@ class Lib:
         `False` if it's for arm.
         """
         return self._aarch64
+    
+    @property
+    def applied_patches(self) -> list[AppliedPatch]:
+        """A list of all the patches that have been applied to the lib."""
+        return list(self._applied_patches)
 
     def apply_patch(self, addr: VirtualAddress, patch: bytes|bytearray):
         """Applies the given patch to the lib at the specified address.
@@ -304,6 +327,9 @@ class Lib:
         if file_address is None:
             abort(f'Failed to convert address {addr} to file offset')
 
+        self._applied_patches.append(
+            AppliedPatch(file_address, self._bytes[file_address:file_address + len(patch)], patch)
+        )
         self._bytes[file_address:file_address + len(patch)] = patch
         if len(self._bytes) != self._bytes_len:
             abort('The size of the patched lib was modified')

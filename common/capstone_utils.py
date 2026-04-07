@@ -1,5 +1,6 @@
 import re
 from itertools import combinations
+from typing import Generator
 
 from capstone import *
 from keystone import (
@@ -20,9 +21,20 @@ ks_aarch64 = Ks(KS_ARCH_ARM64, KS_MODE_LITTLE_ENDIAN)
 HEX = r'(?:0x[0-9a-fA-F]+?)'
 IMMEDIATE = fr'(?:-?\d+?|{HEX})'
 
-def disasm_lite(instructions: bytes, aarch64: bool):
+def disasm_lite(
+        instructions: bytes, aarch64: bool
+    ) -> Generator[tuple[int, int, str, str], None, None]:
     cs = cs_aarch64 if aarch64 else cs_thumb
     return cs.disasm_lite(instructions, 0x0)
+
+def disasm_lite_to_str(instructions: bytes, aarch64: bool) -> Generator[str, None, None]:
+    """Just like `disasm_lite` but only returns the
+    instruction as a string (mnemonic + op_str).
+
+    The returned string is in lowercase.
+    """
+    for _, _, mnemonic, op_str in disasm_lite(instructions, aarch64):
+        yield f'{mnemonic} {op_str}'.strip().lower()
 
 def asm(instructions: str|list[str], aarch64: bool, addr: int = 0) -> bytes:
     if isinstance(instructions, list):

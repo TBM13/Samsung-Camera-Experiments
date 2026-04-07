@@ -1,4 +1,3 @@
-import io
 import multiprocessing
 import sys
 
@@ -6,72 +5,103 @@ from common.capstone_utils import *
 from tests.common import *
 
 
+@dataclass
 class LibData(BaseLibData):
-    def __init__(
-            self, path: str,
-            has_pointer_auth: bool,
-            getValueStr_str_reg: str,
-            free_reg: str,
-            mod_exit_address: int
-        ):
-        self.has_pointer_auth = has_pointer_auth
-        self.getValueStr_str_reg = getValueStr_str_reg
-        self.free_reg = free_reg
-        self.mod_exit_address = mod_exit_address
-
-        super().__init__(path)
+    has_pointer_auth: bool
+    """Whether the lib has pointer authentication
+    (PACIASP/AUTIASP instructions).
+    """
+    str_reg: str
+    """The register where `CameraCapability::getValueStr`
+    writes the string to.
+    """
+    free_reg: str
+    """The register used in the first `mov wX, #1`
+    instruction in `CameraCapability::init`.
+    """
 
 LIBS_DATA = [
     # Exynos 2400e (S5E9945)
-    LibData('s24fe_b.so', True, 'x8', 'x8', 0x2DB348)
+    LibData('s24fe_b.so', True, 'x8', 'w8'),
 ]
+
+def create_mod_cave(lib: bytes, queue: multiprocessing.Queue):
+    import common.patch_utils as putils
+    import patch_s5e as s5e
+    # Ensure that prints from this process are flushed immediately
+    sys.stdout.reconfigure(line_buffering=True)
+
+    lib: putils.Lib = putils.Lib(lib)
+    mod = s5e.create_mod_cave(lib)
+    queue.put((lib.applied_patches, mod.max_size))
 
 def capabilities_mod(lib: bytes, queue: multiprocessing.Queue):
     import common.patch_utils as putils
     import patch_s5e as s5e
+    # Ensure that prints from this process are flushed immediately
+    sys.stdout.reconfigure(line_buffering=True)
 
-    stdout_buffer = io.StringIO()
-    sys.stdout = Tee(sys.stdout, stdout_buffer)
-
-    lib = putils.Lib(lib)
-    res = list(s5e.capabilities_mod(lib))
-    _, getValueStr_replacement = res[0]
-    init_mov_addr, _ = res[1]
-    mod_start, mod_bytes = res[2]
-
-    lines = stdout_buffer.getvalue().splitlines()
-    queue.put((
-        lines, getValueStr_replacement,
-        init_mov_addr.linked_addr(lib),
-        mod_start.linked_addr(lib), mod_bytes
-    ))
+    lib: putils.Lib = putils.Lib(lib)
+    mod = putils.Mod(putils.VirtualAddress(0, False), 1000, lib.is_aarch64)
+    s5e.apply_capabilities_mod(lib, mod)
+    queue.put(lib.applied_patches)
 
 class TestS5E(LibTestCase):
     zip_file_path = 'tests/s5e.zip'
 
+    def test_mod_cave_creation(self):
+        for lib_data in LIBS_DATA:
+            applied_patches, mod_max_size = self.execute_test(lib_data, create_mod_cave)
+            # At least 10 instructions should fit
+            self.assertGreaterEqual(mod_max_size, 10 * 4)
+
+            # Ensure getValueStr was properly patched
+            self.assertEqual(len(applied_patches), 1)
+            patch = applied_patches[0]
+            if lib_data.has_pointer_auth:
+                self.assertInstructionsStartWith(True, patch.original_bytes, [
+                    r'paciasp',
+                    r'sub sp, sp, #.+'
+                ])
+
+                self.assertInstructionsEqual(True, patch.patched_bytes, [
+                    r'paciasp',
+                    rf'stp xzr, xzr, \[{lib_data.str_reg}\]',
+                    rf'str xzr, \[{lib_data.str_reg}, #0x10\]',
+                    r'autiasp',
+                    r'ret'
+                ])
+            else:
+                self.assertInstructionsStartWith(True, patch.original_bytes, [
+                    r'sub sp, sp, #.+'
+                ])
+
+                self.assertInstructionsEqual(True, patch.patched_bytes, [
+                    rf'stp xzr, xzr, \[{lib_data.str_reg}\]',
+                    rf'str xzr, \[{lib_data.str_reg}, #0x10\]',
+                    r'ret'
+                ])
+
     def test_capabilities_mod(self):
         for lib_data in LIBS_DATA:
-            (
-                lines, 
-                getValueStr_replacement, 
-                init_mov_addr, 
-                mod_start, mod_bytes
-            ) = self.execute_test(lib_data, capabilities_mod)
+            applied_patches = self.execute_test(lib_data, capabilities_mod)
+            self.assertEqual(len(applied_patches), 2)
 
-            self.assertIn(f'[+] Found string register {lib_data.getValueStr_str_reg}', lines)
-            first_ins = next(disasm_lite(getValueStr_replacement[:4], True))
-            penultimate_ins = next(disasm_lite(getValueStr_replacement[-8:-4], True))
-            if lib_data.has_pointer_auth:
-                self.assertEqual(first_ins[2], 'paciasp')
-                self.assertEqual(penultimate_ins[2], 'autiasp')
-            else:
-                self.assertNotEqual(first_ins[2], 'paciasp')
-                self.assertNotEqual(penultimate_ins[2], 'autiasp')
+            # branch to mod on CameraCapability::init
+            branch_to_mod = applied_patches[0]
+            replaced_mov = self.assertInstructionsEqual(True, branch_to_mod.original_bytes, [
+                f'(mov {lib_data.free_reg}, #1)'
+            ])[0]
+            self.assertInstructionsEqual(True, branch_to_mod.patched_bytes, [
+                r'b #.+'
+            ])
 
-            self.assertIn(f'[+] Found free register {lib_data.free_reg}', lines)
-            self.assertEqual(init_mov_addr, lib_data.mod_exit_address - 4)
-
-            #last_ins = next(disasm_lite(mod_bytes[-4:], True))
-            #exit_addr = last_ins.operands[0].imm + (mod_start + len(mod_bytes) - 4)
-            #self.assertEqual(exit_addr, lib_data.mod_exit_address)
-            
+            # mod instructions on mod cave
+            mod = applied_patches[1]
+            self.assertEqual(mod.file_offset, 0)
+            # since we didn't specify any modifications, the mod should
+            # only have the mov we replaced and the exit branch
+            self.assertInstructionsEqual(True, mod.patched_bytes, [
+                replaced_mov,
+                rf'b #{hex(branch_to_mod.file_offset + len(branch_to_mod.patched_bytes))}'
+            ])

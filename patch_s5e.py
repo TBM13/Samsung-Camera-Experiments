@@ -31,42 +31,37 @@ class Capability(enum.IntEnum):
 
     ColorSpaceProfiles = 65536
 
-def capabilities_mod(
-        lib: Lib,
-        hw_level: SupportedHardwareLevel|None = None, 
-        enable_capabilities: list[Capability]|None = None
-    ):
-    aarch64 = True
-
+def create_mod_cave(lib: Lib) -> Mod:
     # CameraCapability::getValueStr takes a capabilities bitmask and a string buffer.
-    # It then builds a string listing the enabled capabilities. We can initialize the buffer
-    # to an empty string, return early and replace the following instructions with our mod.
-    getValueStr = lib.find_symbol('^_ZNK16CameraCapability11getValueStrEv$')
-    if getValueStr is None:
+    # It builds a string listing the enabled capabilities. We can initialize the
+    # buffer to an empty string and return early so as to create a code cave
+    function = lib.find_symbol('^_ZNK16CameraCapability11getValueStrEv$')
+    if function is None:
         abort('Failed to find CameraCapability::getValueStr function')
+    
     print('[+] Found CameraCapability::getValueStr function')
-
-    getValueStr_addr = VirtualAddress(getValueStr.rebased_addr, True)
-    getValueStr_start_block: Block = lib.project.factory.block(getValueStr.rebased_addr, size=20 * 4)
+    func_start_addr = VirtualAddress(function.rebased_addr, True)
+    func_start: Block = lib.project.factory.block(function.rebased_addr, size=20 * 4)
+    func_start_insns: list[CsInsn] = func_start.capstone.insns
 
     # Search for the empty string initialization at the start of getValueStr
     # TODO: We should probably do a RDA here
     movs: dict[str, str] = {}
     empty_bytes_initialized: dict[str, int] = {}
-    for ins in getValueStr_start_block.capstone.insns:
+    for ins in func_start_insns:
         ins: CsInsn = ins
         if ins.mnemonic == 'mov':
-            dst = reg_name(ins.operands[0].reg, aarch64)
-            src = reg_name(ins.operands[1].reg, aarch64)
+            dst = reg_name(ins.operands[0].reg, lib.is_aarch64)
+            src = reg_name(ins.operands[1].reg, lib.is_aarch64)
             movs[dst] = src
         
         elif ins.mnemonic == 'stp':
-            src1 = reg_name(ins.operands[0].reg, aarch64)
-            src2 = reg_name(ins.operands[1].reg, aarch64)
+            src1 = reg_name(ins.operands[0].reg, lib.is_aarch64)
+            src2 = reg_name(ins.operands[1].reg, lib.is_aarch64)
             if src1 != 'xzr' or src2 != 'xzr':
                 continue
 
-            dst = reg_name(ins.operands[2].reg, aarch64)
+            dst = reg_name(ins.operands[2].reg, lib.is_aarch64)
             offset = ins.operands[2].mem.disp
             if offset != 0 and offset != 8:
                 abort(f'Unexpected offset {offset} in empty string initialization')
@@ -75,11 +70,11 @@ def capabilities_mod(
             empty_bytes_initialized[dst] += 8
         
         elif ins.mnemonic == 'str':
-            src = reg_name(ins.operands[0].reg, aarch64)
+            src = reg_name(ins.operands[0].reg, lib.is_aarch64)
             if src != 'xzr':
                 continue
 
-            dst = reg_name(ins.operands[1].reg, aarch64)
+            dst = reg_name(ins.operands[1].reg, lib.is_aarch64)
             offset = ins.operands[1].mem.disp
             if offset != 0 and offset != 16:
                 abort(f'Unexpected offset {offset} in empty string initialization')
@@ -102,42 +97,46 @@ def capabilities_mod(
     print(f'[+] Found string register {str_reg}')
 
     # Initialize empty string at the start of the function and return
-    empty_string_initialization = bytearray()
+    empty_str_init = bytearray()
     has_paciasp = False
-    if getValueStr_start_block.capstone.insns[0].mnemonic == 'paciasp':
+    if func_start_insns[0].mnemonic == 'paciasp':
         # Preserve paciasp, otherwise lib will crash
-        empty_string_initialization += getValueStr_start_block.capstone.insns[0].bytes
-        sp_reservation: CsInsn = getValueStr_start_block.capstone.insns[1]
+        empty_str_init += func_start_insns[0].bytes
+        sp_reservation: CsInsn = func_start_insns[1]
         has_paciasp = True
 
         print('[*] Lib has Pointer Authentication')
     else:
-        sp_reservation: CsInsn = getValueStr_start_block.capstone.insns[0]
+        sp_reservation: CsInsn = func_start_insns[0]
 
     if (sp_reservation.mnemonic != 'sub'
-        or reg_name(sp_reservation.operands[0].reg, aarch64) != 'sp'
-        or reg_name(sp_reservation.operands[1].reg, aarch64) != 'sp'
+        or reg_name(sp_reservation.operands[0].reg, lib.is_aarch64) != 'sp'
+        or reg_name(sp_reservation.operands[1].reg, lib.is_aarch64) != 'sp'
     ):
         abort(f'Unexpected instruction "{sp_reservation.mnemonic} {sp_reservation.op_str}"')
 
-    empty_string_initialization += asm([
+    empty_str_init += asm([
         # empty string initialization
         f'STP XZR, XZR, [{str_reg}]',
         f'STR XZR, [{str_reg}, #16]',
-    ], aarch64)
+    ], lib.is_aarch64)
     if has_paciasp:
-        empty_string_initialization += b'\xBF\x23\x03\xD5'  # AUTIASP
-    empty_string_initialization += asm('RET', aarch64)
+        empty_str_init += b'\xBF\x23\x03\xD5'  # AUTIASP
+    empty_str_init += asm('RET', lib.is_aarch64)
 
-    yield getValueStr_addr, empty_string_initialization
-
-    # Prepare mod
-    mod = Mod(
-        start_addr=getValueStr_addr + len(empty_string_initialization),
-        max_size=getValueStr.size - len(empty_string_initialization),
-        is_aarch64=aarch64
+    # Apply empty string initialization
+    lib.apply_patch(func_start_addr, empty_str_init)
+    return Mod(
+        start_addr=func_start_addr + len(empty_str_init),
+        max_size=function.size - len(empty_str_init),
+        is_aarch64=lib.is_aarch64
     )
 
+def apply_capabilities_mod(
+        lib: Lib, mod: Mod,
+        hw_level: SupportedHardwareLevel|None = None, 
+        enable_capabilities: list[Capability]|None = None
+    ):
     # CameraCapability::init takes the hw level and the camera's capabilities bitmask,
     # then sets the hw level and adds more capabilities (or not) depending on its value.
     init = lib.find_symbol(r'^_ZN16CameraCapability4initEh29AvailableCameraCapabilityType$')
@@ -156,12 +155,15 @@ def capabilities_mod(
     if init_mov_ins.mnemonic != 'mov':
         abort(f'Unexpected first instruction {init_mov_ins.mnemonic}')
     # MOV <reg>, #1   - We can consider reg free
-    free_reg = reg_name(init_mov_ins.operands[0].reg, aarch64).replace('w', 'x')
+    free_reg = reg_name(init_mov_ins.operands[0].reg, lib.is_aarch64).replace('w', 'x')
     print(f'[+] Found free register {free_reg}')
 
     # Replace the MOV with a branch to the mod
     init_mov_ins_addr = VirtualAddress(init_mov_ins.address, True)
-    yield init_mov_ins_addr, mod.assemble_branch_to_mod(lib, init_mov_ins_addr)
+    lib.apply_patch(
+        init_mov_ins_addr, mod.assemble_branch_to_mod(lib, init_mov_ins_addr)
+    )
+
     # Add the MOV at the end of the mod
     mod.add_exit_instruction(init_mov_ins.bytes)
 
@@ -192,7 +194,9 @@ def capabilities_mod(
         f'b 0x{exit_address.linked_addr(lib):x}'
     )
 
-    yield mod.start_addr, mod.assemble(lib)
+    lib.apply_patch(
+        mod.start_addr, mod.assemble(lib)
+    )
 
 ########################################################################
 def parse_args() -> argparse.Namespace:
@@ -260,25 +264,25 @@ def main():
 
     out_libs: list[str] = []
     for file in args.libs:
+        print(f'\n[*] Patching "{file.name}"...')
         lib = Lib(file.read())
         file.close()
 
-        if not lib.is_aarch64:
-            # So far I haven't found any 32-bit camera.s5eXXXX.so lib
-            abort('32-bit libs are not supported')
-
-        print(f'\n[*] Patching "{file.name}"...')
         if 'libexynoscamera3.so' in lib.lib.deps:
             # Exynos 1280 devices include a camera.s5e8825.so lib
             # that is a wrapper for libexynoscamera3.so
             warn('The lib depends on libexynoscamera3.so. You should patch that one instead')
 
-        for address, bytes in capabilities_mod(
-            lib=lib,
+        if not lib.is_aarch64:
+            # So far I haven't found any 32-bit camera.s5eXXXX.so lib
+            abort('32-bit libs are not supported')
+
+        mod = create_mod_cave(lib)
+        apply_capabilities_mod(
+            lib=lib, mod=mod,
             hw_level=args.hardware_level,
             enable_capabilities=args.enable_cap,
-        ):
-            lib.apply_patch(address, bytes)
+        )
 
         base, _ = os.path.splitext(file.name)
         output_path = f'{base}_patched.so'
