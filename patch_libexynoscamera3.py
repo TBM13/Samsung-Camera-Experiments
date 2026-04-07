@@ -34,21 +34,25 @@ class Lib3(Lib):
     def __init__(self, bytes: bytes):
         super().__init__(bytes)
 
-        self._is_legacy = self.find_symbol(
+        m_createAvailableCapabilities = self.find_symbol(
             r'^_ZN7android\d\dExynosCameraMetadataConverter29m_createAvailableCapabilities.+'
-        ) is None
+        )
+        legacy_constructStaticInfo = self.find_symbol(
+            r'^_ZN7android\d\dExynosCamera3MetadataConverter19constructStaticInfo.+'
+        )
 
+        self._is_legacy = m_createAvailableCapabilities is None and legacy_constructStaticInfo is not None
         if self.is_legacy:
-            abort('Legacy lib detected. Patching these libs is not supported yet')
-            warn('Legacy lib detected. Patching these libs is highly experimental!')
+            abort('Legacy lib detected (likely from a device launched with Android 8 or earlier). These libs aren\'t supported')
 
     @property
     def is_legacy(self) -> bool:
-        """If true, this is a legacy libexynoscamera3 lib (from
-        devices that launched with Android 8 or earlier).
+        """If true, this is a legacy libexynoscamera3 lib 
+        (likely from devices that launched with Android 8 or earlier).
         
         The main difference is that the capabilities are stored as an
-        array instead of a bitmask.
+        array instead of a bitmask, less capabilities are supported and
+        only LIMITED hardware level seems to be expected.
         """
         return self._is_legacy
 
