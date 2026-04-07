@@ -3,6 +3,7 @@ import argparse
 import enum
 import os
 
+from capstone.arm64_const import ARM64_OP_IMM
 from keystone import KsError
 
 from common.android_camera_metadata import SupportedHardwareLevel
@@ -145,18 +146,37 @@ def apply_capabilities_mod(
     bitmask_reg = 'x2'
     print('[+] Found CameraCapability::init function')
 
-    init_start_block: Block = lib.project.factory.block(init.rebased_addr, size=8 * 4)
-    if init_start_block.capstone.insns[0].mnemonic == 'bti':
-        init_mov_ins: CsInsn = init_start_block.capstone.insns[1]
-        print('[*] Lib has Branch Target Identification')
-    else:
-        init_mov_ins: CsInsn = init_start_block.capstone.insns[0]
+    # find MOV <reg>, #1 instruction
+    init_block: Block = lib.project.factory.block(init.rebased_addr, size=init.size)
+    init_insns: list[CsInsn] = init_block.capstone.insns
+    mov_candidates: list[CsInsn] = []
+    for ins in init_insns:
+        if ins.mnemonic == 'mov' and len(ins.operands) == 2:
+            if ins.operands[1].type == ARM64_OP_IMM and ins.operands[1].imm == 1:
+                mov_candidates.append(ins)
+                continue
 
-    if init_mov_ins.mnemonic != 'mov':
-        abort(f'Unexpected first instruction {init_mov_ins.mnemonic}')
-    # MOV <reg>, #1   - We can consider reg free
+        if len(mov_candidates) == 0:
+            # We are assuming the MOV is one of the first instructions of the function,
+            # so lets ensure that previous instructions don't do anything fancy
+            if ins.mnemonic in ['paciasp', 'bti']:
+                continue
+            if 'sp' in ins.op_str:
+                continue
+
+            ins = f"{ins.mnemonic} {ins.op_str}".strip()
+            abort(f'Unexpected instruction "{ins}" before MOV instruction')
+
+    if len(mov_candidates) == 0:
+        abort('Failed to find MOV <reg>, #1 instruction')
+    if len(mov_candidates) > 1:
+        abort('Multiple MOV <reg>, #1 instructions found')
+    init_mov_ins = mov_candidates[0]
+
+    # Since we will move the MOV instruction to the end of the mod,
+    # we can use its target register as a free register in the mod
     free_reg = reg_name(init_mov_ins.operands[0].reg, lib.is_aarch64).replace('w', 'x')
-    print(f'[+] Found free register {free_reg}')
+    print(f'[+] Found MOV instruction and free register {free_reg}')
 
     # Replace the MOV with a branch to the mod
     init_mov_ins_addr = VirtualAddress(init_mov_ins.address, True)

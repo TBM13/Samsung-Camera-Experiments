@@ -45,7 +45,7 @@ LIBS_DATA = [
     LibData('s24fe_b.so', True, 'x8', 'w8'),
 
     # Exynos 2500 (S5E9955)
-    # LibData('zflip7_b.so', True, 'x8', 'w8'),   TODO: Support lib
+    LibData('zflip7_b.so', True, 'x8', 'w8'),
 
     # Exynos 2600 (S5E9965)
     # TODO: Find libs
